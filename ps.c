@@ -9,26 +9,32 @@
 
 static const char* pack_header();
 static const char* system_header();
+static const char* packet_header(uint16_t* len);
 static const char* padding_packet();
 static const char* audio_packet();
 static const char* video_packet();
 // static const char* pes_packet();
 
+int g_packet;
+
 #define CALL(x)		({ const char* r = x; if(r) return r; })
 
 const char* decode_pack()
 {
-	CALL(pack_header());
 	while(1)	// TODO:終了条件
 	{
 		uint32_t n = bs_peek(32);
-		if(n == 0x000001be) CALL(padding_packet());
+		if(n == 0x000001ba) CALL(pack_header());
+		else if(n == 0x000001be) CALL(padding_packet());
 		else if(0x000001c0 <= n && n <= 0x000001df)
 			CALL(audio_packet());
 		else if(0x000001e0 <= n && n <= 0x000001ef)
 			CALL(video_packet());
 		else
+		{
+			fprintf(stderr, "(0x%08x @ P%06u)", n, g_packet);
 			return "unknown packet id";
+		}
 		// CALL(pes_packet());
 	}
 	return NULL;
@@ -83,24 +89,90 @@ static const char* system_header()
 	return NULL;
 }
 
+static const char* packet_header(uint16_t* len)
+{
+	*len = 0;
+	printf("---- PACKET HEADER ----\n");
+	while(bs_peek(8) == 0b11111111)
+	{
+		bs_gets(8);
+		(*len) += 1;
+	}
+
+	if(bs_peek(2) == 0b01)
+	{
+		bs_gets(2);
+		printf("std_buf_scale: %u\n", bs_gets(1));
+		printf("std_buf_size: %u\n", bs_get(13));
+		(*len) += 2;
+	}
+	uint32_t n = bs_peek(4);
+	if(n == 0b0010 || n == 0b0011)
+	{
+		bs_gets(4);
+		printf("pres_time_stamp1: %u\n", bs_gets(3));
+		if(bs_gets(1) != 0b1) return "illegal marker-bit 1 (ph)";
+		printf("pres_time_stamp2: %u\n", bs_get(15));
+		if(bs_gets(1) != 0b1) return "illegal marker-bit 2 (ph)";
+		printf("pres_time_stamp3: %u\n", bs_get(15));
+		if(bs_gets(1) != 0b1) return "illegal marker-bit 3 (ph)";
+		(*len) += 5;
+	}
+	if(n == 0b0011)
+	{
+		if(bs_gets(4) != 0b0001) return "illegal filler (ph)";
+		printf("dec_time_stamp1: %u\n", bs_gets(3));
+		if(bs_gets(1) != 0b1) return "illegal marker-bit 4 (ph)";
+		printf("dec_time_stamp2: %u\n", bs_get(15));
+		if(bs_gets(1) != 0b1) return "illegal marker-bit 5 (ph)";
+		printf("dec_time_stamp3: %u\n", bs_get(15));
+		if(bs_gets(1) != 0b1) return "illegal marker-bit 6 (ph)";
+		(*len) += 5;
+	}
+	else if(n != 0b0010)
+	{
+		bs_gets(8);
+		(*len) += 1;
+	}
+	return NULL;
+}
+
 static const char* padding_packet()
 {
-	printf("---- PADDING PACKET ----\n");
+	bs_get(32);
+	printf("---- [%06u] PADDING PACKET ----\n", g_packet++);
+	uint16_t plen = bs_get(16);
+	uint16_t hlen;
+	CALL(packet_header(&hlen));
+	plen -= hlen;
+	for(uint16_t i = 0; i < plen; ++i) bs_gets(8);
+	printf("data bytes: %u\n", plen);
 	return NULL;
 }
 
 static const char* audio_packet()
 {
 	uint32_t v = bs_get(32);
-	printf("---- AUDIO PACKET (0x%08x) ----\n", v);
+	printf("---- [%06u] AUDIO PACKET (0x%08x) ----\n", g_packet++, v);
+	uint16_t plen = bs_get(16);
+	uint16_t hlen;
+	CALL(packet_header(&hlen));
+	plen -= hlen;
+	for(uint16_t i = 0; i < plen; ++i) bs_gets(8);
+	printf("data bytes: %u\n", plen);
 	return NULL;
 }
 
 static const char* video_packet()
 {
 	uint32_t v = bs_get(32);
-	printf("---- VIDEO PACKET (0x%08x) ----\n", v);
+	printf("---- [%06u] VIDEO PACKET (0x%08x) ----\n", g_packet++, v);
 	uint16_t plen = bs_get(16);
+	uint16_t hlen;
+	CALL(packet_header(&hlen));
+	plen -= hlen;
+	for(uint16_t i = 0; i < plen; ++i) bs_gets(8);
+	printf("data bytes: %u\n", plen);
 	return NULL;
 }
 
