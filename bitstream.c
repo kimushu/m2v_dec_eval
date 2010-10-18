@@ -7,7 +7,7 @@
 #include "bitstream.h"
 
 static FILE* fp;
-static uint32_t buf;
+static uint32_t buf, buf2;
 static int rest;		// buf内の残り
 
 #define SWAP16(w)	((((w)>>8)&0x00ff)|(((w)<<8)&0xff00))
@@ -21,11 +21,12 @@ const char* bs_open(const char* file)
 	fp = fopen(file, "rb");
 	if(!fp) return "cannot open file";
 	rest = 0;
+	fread(&buf2, 4, 1, fp);
 	return NULL;
 }
 
 //--------------------------------------------------------------------------------
-// open (0-32 bits)
+// get bits (0-32 bits)
 //
 uint32_t bs_get(int len)
 {
@@ -34,8 +35,8 @@ uint32_t bs_get(int len)
 	{
 		if(!rest)
 		{
-			fread(&buf, 4, 1, fp);
-			buf = SWAP32(buf);
+			buf = SWAP32(buf2);
+			fread(&buf2, 4, 1, fp);
 			rest = 32;
 		}
 
@@ -58,5 +59,35 @@ uint32_t bs_get(int len)
 uint8_t bs_gets(int len)
 {
 	return bs_get(len);
+}
+
+
+//--------------------------------------------------------------------------------
+// peek bits (0-32 bits)
+//
+uint32_t bs_peek(int len)
+{
+	uint32_t l_buf = buf;
+	int l_rest = rest;
+	uint32_t r = 0;
+	while(len > 0)
+	{
+		if(!l_rest)
+		{
+			l_buf = SWAP32(buf2);
+			l_rest = 32;
+		}
+
+		int i = l_rest < len ? l_rest : len;
+
+		r <<= i;
+		r |= (l_buf >> (32 - i));
+		l_buf <<= i;
+
+		l_rest -= i;
+		len -= i;
+	}
+
+	return r;
 }
 
