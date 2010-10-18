@@ -7,8 +7,10 @@
 #ifndef _PS_H_
 #define _PS_H_
 
+#include "bitstream.h"
+
 // exports
-int decode_pack();
+extern const char* decode_pack();
 
 #endif	/* !_PS_H_ */
 

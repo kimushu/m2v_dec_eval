@@ -1,12 +1,11 @@
 #================================================================================
-# m1v_dec_eval - PS デコーダ
-# ref: ISO13818-1
+# m1v_dec_eval - make
 # $Id$
 #================================================================================
 
 TARGET = m1vdec
 
-SOURCES = ps.c
+SOURCES = main.c ps.c bitstream.c
 
 CC = gcc
 CFLAGS = -Wall -std=c99

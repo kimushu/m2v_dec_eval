@@ -6,19 +6,31 @@
 
 #include "ps.h"
 
-static int pack_header();
-static int pes_packet();
+static const char* pack_header();
+static const char* pes_packet();
 
-int decode_pack()
+const char* decode_pack()
 {
 	// Table 2-32
-	pack_header();
+	const char* r = pack_header();
+	if(r) return r;
 	while(1)	// TODO:終了条件
 	{
+		r = pes_packet();
+		if(r) return r;
 	}
+	return 0;
 }
 
-static int pack_header()
+static const char* pack_header()
 {
+	if(bs_get(32) != 0x000001ba) return "illegal pack_start_code";
+	if(bs_gets(2) != 1) return "illegal pack_header '01'";
+	return 0;
+}
+
+static const char* pes_packet()
+{
+	return 0;
 }
 
