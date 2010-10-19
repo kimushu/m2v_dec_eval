@@ -15,6 +15,7 @@ static const char* gop();
 static const char* picture();
 static const char* slice();
 static const char* macroblock();
+static const char* block(int bn);
 
 int g_v_packet;
 
@@ -25,6 +26,12 @@ int fw_f_code, bw_f_code;
 int quant_scale;
 int mb_addr_inc, mb_type;
 int mb_quant, mb_mo_fw, mb_mo_bw, mb_pat, mb_intra;
+int mb_quant_scale;
+int mo_h_fw_code, mo_h_fw_r;
+int mo_v_fw_code, mo_v_fw_r;
+int mo_h_bw_code, mo_h_bw_r;
+int mo_v_bw_code, mo_v_bw_r;
+int pat_code[6], dct_dc_diff[6];
 
 static const char* const pct_string = "0IPBD567";
 
@@ -210,6 +217,99 @@ static const char* macroblock()
 	mb_intra = (mb_type >> 0) & 1;
 	printf("mb_type: quant=%d, mo_fw=%d, mo_bw=%d, pat=%d, intra=%d\n",
 		mb_quant, mb_mo_fw, mb_mo_bw, mb_pat, mb_intra);
+	if(mb_quant) printf("mb_quant_scale: %d\n", mb_quant_scale = bs_gets(5));
+	if(mb_mo_fw)
+	{
+		printf("mo_h_fw_code: %d\n", mo_h_fw_code = bs_vlc(vlc_table_b4));
+		if(mo_h_fw_code != 0 && fw_f_code > 1)
+			printf("mo_h_fw_r: %d\n", mo_h_fw_r = bs_get(fw_f_code - 1));
+		printf("mo_v_fw_code: %d\n", mo_v_fw_code = bs_vlc(vlc_table_b4));
+		if(mo_v_fw_code != 0 && fw_f_code > 1)
+			printf("mo_v_fw_r: %d\n", mo_v_fw_r = bs_get(fw_f_code - 1));
+	}
+	if(mb_mo_bw)
+	{
+		printf("mo_h_bw_code: %d\n", mo_h_bw_code = bs_vlc(vlc_table_b4));
+		if(mo_h_bw_code != 0 && bw_f_code > 1)
+			printf("mo_h_bw_r: %d\n", mo_h_bw_r = bs_get(bw_f_code - 1));
+		printf("mo_v_bw_code: %d\n", mo_v_bw_code = bs_vlc(vlc_table_b4));
+		if(mo_v_bw_code != 0 && bw_f_code > 1)
+			printf("mo_v_bw_r: %d\n", mo_v_bw_r = bs_get(bw_f_code - 1));
+	}
+	for(int i = 0; i < 6; ++i) pat_code[i] = mb_intra;
+	if(mb_pat)
+	{
+		int coded_blk_pat = bs_vlc(vlc_table_b3);
+		for(int i = 0; i < 6; ++i)
+			if(coded_blk_pat & (1<<(5-i))) pat_code[i] = 1;
+	}
+	printf("pat_code:");
+	for(int i = 0; i < 6; ++i) printf(" %d", pat_code[i]);
+	printf("\n");
+
+	for(int i = 0; i < 6; ++i) CALL(block(i));
+
+	if(pic_coding_type == 4 && bs_gets(1) != 0b1)
+		return "illegal end-of-mb (D)";
+
 	return NULL;
 }
+
+
+static const char* block(int bn)
+{
+	if(pat_code[bn])
+	{
+		if(mb_intra)
+		{
+			if(bn < 4)
+			{
+				int dc_size_luma = bs_vlc(vlc_table_b5a);
+				if(dc_size_luma > 0) dct_dc_diff[bn] = bs_get(dc_size_luma);
+			}
+			else
+			{
+				int dc_size_chroma = bs_vlc(vlc_table_b5b);
+				if(dc_size_chroma > 0) dct_dc_diff[bn] = bs_get(dc_size_chroma);
+			}
+		}
+		else
+		{
+			int v = bs_vlc(vlc_table_dct_f);
+			int run = v / 1000;
+			int level = (v % 1000) - 500;
+			if(run == 999)
+			{
+				run = bs_gets(6);
+				level = bs_gets(8);
+				if(level >= 128) level -= 256;
+			}
+			if(level == 0) level = bs_gets(8);
+			if(level == -128) level = ((int)bs_gets(8)) - 256;
+			printf("dct_coef_first: run=%d, level=%d\n", run, level);
+			if(pic_coding_type != 4)
+			{
+				while(bs_peek(2) != 0b10)
+				{
+					int v2 = bs_vlc(vlc_table_dct_n);
+					int run2 = v2 / 1000;
+					int level2 = (v2 % 1000) - 500;
+					if(run2 == 999)
+					{
+						run2 = bs_gets(6);
+						level2 = bs_gets(8);
+						if(level2 >= 128) level2 -= 256;
+						printf("hoge\n");
+					}
+					if(level2 == 0) level2 = bs_gets(8);
+					if(level2 == -128) level2 = ((int)bs_gets(8)) - 256;
+					printf("dct_coef_next: run=%d, level=%d\n", run2, level2);
+				}
+				bs_gets(2);
+			}
+		}
+	}
+	return NULL;
+}
+
 

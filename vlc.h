@@ -22,6 +22,12 @@ extern const VLC_ENTRY vlc_table_b2a[];
 extern const VLC_ENTRY vlc_table_b2b[];
 extern const VLC_ENTRY vlc_table_b2c[];
 extern const VLC_ENTRY vlc_table_b2d[];
+extern const VLC_ENTRY vlc_table_b3[];
+extern const VLC_ENTRY vlc_table_b4[];
+extern const VLC_ENTRY vlc_table_b5a[];
+extern const VLC_ENTRY vlc_table_b5b[];
+extern const VLC_ENTRY vlc_table_dct_f[];
+extern const VLC_ENTRY vlc_table_dct_n[];
 
 
 #endif	/* !_VLC_H_ */
