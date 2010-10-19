@@ -9,6 +9,7 @@
 #include "bitstream.h"
 #include "video.h"
 #include "vlc.h"
+#include "dump.h"
 
 static const char* sequence_header();
 static const char* gop();
@@ -17,10 +18,9 @@ static const char* slice();
 static const char* macroblock();
 static const char* block(int bn);
 
-int g_v_packet;
-
 int video_wd, video_ht;
 int nslice, nmb;
+int max_slices;
 int pic_coding_type;
 int full_pel_fw_vector, full_pel_bw_vector;
 int fw_f_code, bw_f_code;
@@ -37,21 +37,28 @@ int pat_code[6], dct_dc_diff[6];
 static const char* const pct_string = "0IPBD567";
 
 
-const char* decode_video()
+const char* decode_video(const char* ref_dir, int slices)
 {
+	max_slices = slices;
+	dump_start(ref_dir);
 	while(bs_peek(32) == 0x000001b3)
 	{
 		CALL(sequence_header());
-		while(bs_peek(32) == 0x000001b8) CALL(gop());
+		while(bs_peek(32) == 0x000001b8)
+		{
+			CALL(gop());
+			if(nslice == max_slices) return NULL;
+		}
 	}
 	if(bs_get(32) != 0x000001b7) return "illegal sequence end code";
+	dump_finish();
 	return NULL;
 }
 
 static const char* sequence_header()
 {
 	bs_get(32);
-	printf("---- [%06u] SEQUENCE HEADER ----\n", g_v_packet++);
+	printf("---- SEQUENCE HEADER ----\n");
 	video_wd = bs_get(12);
 	video_ht = bs_get(12);
 	printf("size: %d x %d\n", video_wd, video_ht);
@@ -117,7 +124,11 @@ static const char* gop()
 		bs_gets(32);
 		printf("user_data: %u bytes\n", bs_nextcode(0x000001, 3));
 	}
-	while(bs_peek(32) == 0x00000100) CALL(picture());
+	while(bs_peek(32) == 0x00000100)
+	{
+		CALL(picture());
+		if(nslice == max_slices) return NULL;
+	}
 	return NULL;
 }
 
@@ -164,6 +175,7 @@ static const char* picture()
 	do
 	{
 		CALL(slice());
+		if(nslice == max_slices) return NULL;
 		n = bs_peek(32);
 	}
 	while(0x00000101 <= n && n <= 0x000001af);
@@ -174,8 +186,11 @@ static const char* picture()
 static const char* slice()
 {
 	uint32_t v = bs_get(32);
-	printf("---- SLICE (0x%08x, S:%04d) ----\n", v, nslice++);
+	printf("---- SLICE (0x%08x, S:%04d) ----\n", v, nslice);
 	printf("quant_scale: %d\n", quant_scale = bs_gets(5));
+	dump(dump_slice, NULL, "# slice %6d", nslice);
+	dump(dump_slice, "quant_scale", " %2d", quant_scale);
+	nslice++;
 	int ei = 0;
 	while(bs_gets(1) == 0b1)
 	{
@@ -198,10 +213,13 @@ static const char* slice()
 
 static const char* macroblock()
 {
-	printf("---- MACROBLOCK (S:%04d, M:%04d) ----\n", nslice, nmb++);
+	printf("---- MACROBLOCK (S:%05d, M:%04d) ----\n", nslice, nmb);
 	while(bs_peek(11) == 0b00000001111) bs_get(11);
 	while(bs_peek(11) == 0b00000001000) bs_get(11);
 	printf("mb_addr_inc: %d\n", mb_addr_inc = bs_vlc(vlc_table_b1));
+	dump(dump_mb, NULL, "# slice %6d, mb %4d", nslice, nmb);
+	dump(dump_mb, "mb_addr_inc", " %2d", mb_addr_inc);
+	nmb++;
 	switch(pic_coding_type)
 	{
 	case 0b001:		// I
@@ -219,6 +237,8 @@ static const char* macroblock()
 	mb_pat   = (mb_type >> 1) & 1;
 	mb_intra = (mb_type >> 0) & 1;
 	printf("mb_type: quant=%d, mo_fw=%d, mo_bw=%d, pat=%d, intra=%d\n",
+		mb_quant, mb_mo_fw, mb_mo_bw, mb_pat, mb_intra);
+	dump(dump_mb, "qua mofw mobw pat intra", " %d %d %d %d %d",
 		mb_quant, mb_mo_fw, mb_mo_bw, mb_pat, mb_intra);
 	if(mb_quant) printf("mb_quant_scale: %d\n", mb_quant_scale = bs_gets(5));
 	if(mb_mo_fw)
