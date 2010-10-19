@@ -20,6 +20,7 @@ static const char* block(int bn);
 int g_v_packet;
 
 int video_wd, video_ht;
+int nslice, nmb;
 int pic_coding_type;
 int full_pel_fw_vector, full_pel_bw_vector;
 int fw_f_code, bw_f_code;
@@ -159,6 +160,7 @@ static const char* picture()
 		printf("user_data: %u bytes\n", bs_nextcode(0x000001, 3));
 	}
 	uint32_t n;
+	nslice = 0;
 	do
 	{
 		CALL(slice());
@@ -172,7 +174,7 @@ static const char* picture()
 static const char* slice()
 {
 	uint32_t v = bs_get(32);
-	printf("---- SLICE (0x%08x) ----\n", v);
+	printf("---- SLICE (0x%08x, S:%04d) ----\n", v, nslice++);
 	printf("quant_scale: %d\n", quant_scale = bs_gets(5));
 	int ei = 0;
 	while(bs_gets(1) == 0b1)
@@ -182,6 +184,7 @@ static const char* slice()
 		ei = 1;
 	}
 	if(ei) printf("\n");
+	nmb = 0;
 	do
 	{
 		CALL(macroblock());
@@ -195,7 +198,7 @@ static const char* slice()
 
 static const char* macroblock()
 {
-	printf("---- MACROBLOCK ----\n");
+	printf("---- MACROBLOCK (S:%04d, M:%04d) ----\n", nslice, nmb++);
 	while(bs_peek(11) == 0b00000001111) bs_get(11);
 	while(bs_peek(11) == 0b00000001000) bs_get(11);
 	printf("mb_addr_inc: %d\n", mb_addr_inc = bs_vlc(vlc_table_b1));
@@ -258,7 +261,7 @@ static const char* macroblock()
 
 static const char* block(int bn)
 {
-	printf("---- BLOCK (#%d) ----\n", bn);
+	printf("---- BLOCK (S:%04d, M:%04d, B:%d) ----\n", nslice, nmb, bn);
 	if(pat_code[bn])
 	{
 		if(mb_intra)
@@ -288,26 +291,25 @@ static const char* block(int bn)
 			if(level == 0) level = bs_gets(8);
 			if(level == -128) level = ((int)bs_gets(8)) - 256;
 			printf("dct_coef_first: run=%d, level=%d\n", run, level);
-			if(pic_coding_type != 4)
+		}
+		if(pic_coding_type != 4)
+		{
+			while(bs_peek(2) != 0b10)
 			{
-				while(bs_peek(2) != 0b10)
+				int v2 = bs_vlc(vlc_table_dct_n);
+				int run2 = v2 / 1000;
+				int level2 = (v2 % 1000) - 500;
+				if(run2 == 999)
 				{
-					int v2 = bs_vlc(vlc_table_dct_n);
-					int run2 = v2 / 1000;
-					int level2 = (v2 % 1000) - 500;
-					if(run2 == 999)
-					{
-						run2 = bs_gets(6);
-						level2 = bs_gets(8);
-						if(level2 >= 128) level2 -= 256;
-						printf("hoge(%d, %d)\n", run2, level2);
-					}
-					if(level2 == 0) level2 = bs_gets(8);
-					if(level2 == -128) level2 = ((int)bs_gets(8)) - 256;
-					printf("dct_coef_next: run=%d, level=%d\n", run2, level2);
+					run2 = bs_gets(6);
+					level2 = bs_gets(8);
+					if(level2 >= 128) level2 -= 256;
 				}
-				bs_gets(2);
+				if(level2 == 0) level2 = bs_gets(8);
+				if(level2 == -128) level2 = ((int)bs_gets(8)) - 256;
+				printf("dct_coef_next: run=%d, level=%d\n", run2, level2);
 			}
+			bs_gets(2);
 		}
 	}
 	return NULL;
