@@ -5,7 +5,7 @@
 
 TARGET = m1vdec
 
-SOURCES = main.c ps.c bitstream.c
+SOURCES = main.c ps.c bitstream.c video.c
 
 CC = gcc
 CFLAGS = -Wall -std=c99

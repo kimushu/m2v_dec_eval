@@ -5,19 +5,19 @@
 //================================================================================
 
 #include <stdio.h>
+#include "m1vdec.h"
 #include "ps.h"
 
 static const char* pack_header();
 static const char* system_header();
 static const char* packet_header(uint16_t* len);
-static const char* padding_packet();
+static const char* padding_ps_packet();
 static const char* audio_packet();
 static const char* video_packet();
 // static const char* pes_packet();
 
-int g_packet;
+int g_ps_packet;
 
-#define CALL(x)		({ const char* r = x; if(r) return r; })
 
 const char* decode_pack()
 {
@@ -25,14 +25,16 @@ const char* decode_pack()
 	{
 		uint32_t n = bs_peek(32);
 		if(n == 0x000001ba) CALL(pack_header());
-		else if(n == 0x000001be) CALL(padding_packet());
+		else if(n == 0x000001be) CALL(padding_ps_packet());
 		else if(0x000001c0 <= n && n <= 0x000001df)
 			CALL(audio_packet());
 		else if(0x000001e0 <= n && n <= 0x000001ef)
 			CALL(video_packet());
+		else if(n == 0xffffffff)	// TODO:仮の終了条件
+			break;
 		else
 		{
-			fprintf(stderr, "(0x%08x @ P%06u)", n, g_packet);
+			fprintf(stderr, "(0x%08x @ P%06u)", n, g_ps_packet);
 			return "unknown packet id";
 		}
 		// CALL(pes_packet());
@@ -137,10 +139,10 @@ static const char* packet_header(uint16_t* len)
 	return NULL;
 }
 
-static const char* padding_packet()
+static const char* padding_ps_packet()
 {
 	bs_get(32);
-	printf("---- [%06u] PADDING PACKET ----\n", g_packet++);
+	printf("---- [%06u] PADDING PACKET ----\n", g_ps_packet++);
 	uint16_t plen = bs_get(16);
 	uint16_t hlen;
 	CALL(packet_header(&hlen));
@@ -153,12 +155,19 @@ static const char* padding_packet()
 static const char* audio_packet()
 {
 	uint32_t v = bs_get(32);
-	printf("---- [%06u] AUDIO PACKET (0x%08x) ----\n", g_packet++, v);
+	printf("---- [%06u] AUDIO PACKET (0x%08x) ----\n", g_ps_packet++, v);
 	uint16_t plen = bs_get(16);
 	uint16_t hlen;
 	CALL(packet_header(&hlen));
 	plen -= hlen;
-	for(uint16_t i = 0; i < plen; ++i) bs_gets(8);
+	for(uint16_t i = 0; i < plen; ++i)
+	{
+		// if(!(i & 15)) printf("\n+%04xh", i);
+		// printf(" %02x", bs_gets(8));
+		uint8_t b = bs_gets(8);
+		fwrite(&b, 1, 1, fpout_a);
+	}
+	// printf("\n");
 	printf("data bytes: %u\n", plen);
 	return NULL;
 }
@@ -166,12 +175,19 @@ static const char* audio_packet()
 static const char* video_packet()
 {
 	uint32_t v = bs_get(32);
-	printf("---- [%06u] VIDEO PACKET (0x%08x) ----\n", g_packet++, v);
+	printf("---- [%06u] VIDEO PACKET (0x%08x) ----\n", g_ps_packet++, v);
 	uint16_t plen = bs_get(16);
 	uint16_t hlen;
 	CALL(packet_header(&hlen));
 	plen -= hlen;
-	for(uint16_t i = 0; i < plen; ++i) bs_gets(8);
+	for(uint16_t i = 0; i < plen; ++i)
+	{
+		// if(!(i & 15)) printf("\n+%04xh", i);
+		// printf(" %02x", bs_gets(8));
+		uint8_t b = bs_gets(8);
+		fwrite(&b, 1, 1, fpout_v);
+	}
+	// printf("\n");
 	printf("data bytes: %u\n", plen);
 	return NULL;
 }
