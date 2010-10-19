@@ -8,6 +8,7 @@
 #include "m1vdec.h"
 #include "ps.h"
 #include "video.h"
+#include "bitstream.h"
 
 static const char* process_ps(const char* file);
 static const char* process_video(const char* file);
@@ -31,7 +32,8 @@ int main(int argc, char* argv[])
 
 	if(r)
 	{
-		fprintf(stderr, "%s\n", r);
+		fprintf(stderr, "%s\nposition: %d bytes (+%d bits)\n",
+			r, g_total_bits / 8, g_total_bits % 8);
 		return 1;
 	}
 

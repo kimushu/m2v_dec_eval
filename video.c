@@ -258,6 +258,7 @@ static const char* macroblock()
 
 static const char* block(int bn)
 {
+	printf("---- BLOCK (#%d) ----\n", bn);
 	if(pat_code[bn])
 	{
 		if(mb_intra)
@@ -299,7 +300,7 @@ static const char* block(int bn)
 						run2 = bs_gets(6);
 						level2 = bs_gets(8);
 						if(level2 >= 128) level2 -= 256;
-						printf("hoge\n");
+						printf("hoge(%d, %d)\n", run2, level2);
 					}
 					if(level2 == 0) level2 = bs_gets(8);
 					if(level2 == -128) level2 = ((int)bs_gets(8)) - 256;
