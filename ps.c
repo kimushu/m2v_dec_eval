@@ -37,7 +37,6 @@ const char* decode_pack()
 			fprintf(stderr, "(0x%08x @ P%06u)", n, g_ps_packet);
 			return "unknown packet id";
 		}
-		// CALL(pes_packet());
 	}
 	return NULL;
 }

@@ -7,6 +7,7 @@
 #include <string.h>
 #include "m1vdec.h"
 #include "ps.h"
+#include "video.h"
 
 static const char* process_ps(const char* file);
 static const char* process_video(const char* file);

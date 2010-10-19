@@ -92,3 +92,50 @@ uint32_t bs_peek(int len)
 }
 
 
+//--------------------------------------------------------------------------------
+// align bits (8,16,32 bits)
+//
+uint32_t bs_align(int bits)
+{
+	if(bits != 8 && bits != 16 && bits != 32)
+		fprintf(stderr, "illegal call bs_align\n");
+
+	return bs_get(rest % bits);
+}
+
+
+//--------------------------------------------------------------------------------
+// search next code (1-4 bytes)
+//
+uint16_t bs_nextcode(uint32_t code, int bytes)
+{
+	for(uint16_t skipped = 0;; ++skipped)
+	{
+		if(bs_peek(bytes * 8) == code) return skipped;
+		bs_gets(8);
+	}
+}
+
+
+//--------------------------------------------------------------------------------
+// decode VLC
+//
+int bs_vlc(const VLC_ENTRY* table)
+{
+	while(table->clen > 0)
+	{
+		uint32_t c;
+		int len;
+		c = bs_peek(len = table->clen);
+		for(; table->clen == len; ++table)
+			if(table->code == c)
+			{
+				bs_get(len);
+				return table->value;
+			}
+	}
+	fprintf(stderr, "VLC decode error\n");
+	return 0;
+}
+
+
