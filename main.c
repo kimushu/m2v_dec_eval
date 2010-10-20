@@ -16,7 +16,7 @@
 #include "bitstream.h"
 
 static const char* process_ps(const char* file);
-static const char* process_video(const char* file, int ref_out, int slices);
+static const char* process_video(const char* file, int ref_out, int slices, int skips);
 
 FILE* fpout_v;
 FILE* fpout_a;
@@ -27,15 +27,17 @@ int main(int argc, char* argv[])
 	const char *ps = NULL, *video = NULL;
 	int ref_out = 0;
 	int slices = 0;
+	int skips = 0;
 
 	int ch;
-	while((ch = getopt(argc, argv, "p:v:s:r")) != -1)
+	while((ch = getopt(argc, argv, "p:v:s:k:r")) != -1)
 	{
 		switch(ch)
 		{
 		case 'p': ps = optarg; break;
 		case 'v': video = optarg; break;
 		case 's': slices = atoi(optarg); break;
+		case 'k': skips = atoi(optarg); break;
 		case 'r': ref_out = 1; break;
 		default:
 			fprintf(stderr, "unknown option: %c\n", ch);
@@ -54,7 +56,7 @@ int main(int argc, char* argv[])
 	if(!r)
 	{
 		if(ps) r = process_ps(ps);
-		if(video) r = process_video(video, ref_out, slices);
+		if(video) r = process_video(video, ref_out, slices, skips);
 	}
 
 	if(r)
@@ -83,7 +85,7 @@ static const char* process_ps(const char* file)
 	return NULL;
 }
 
-static const char* process_video(const char* file, int ref_out, int slices)
+static const char* process_video(const char* file, int ref_out, int slices, int skips)
 {
 	char refdir[256];
 	if(ref_out)
@@ -103,7 +105,7 @@ static const char* process_video(const char* file, int ref_out, int slices)
 	}
 
 	CALL(bs_open(file));
-	CALL(decode_video(ref_out ? refdir : NULL, slices));
+	CALL(decode_video(ref_out ? refdir : NULL, slices, skips));
 	return NULL;
 }
 

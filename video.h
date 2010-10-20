@@ -8,7 +8,7 @@
 #define _VIDEO_H_
 
 // exports
-const char* decode_video(const char* ref_dir, int slices);
+const char* decode_video(const char* ref_dir, int slices, int skips);
 
 #endif	/* !_VIDEO_H_ */
 

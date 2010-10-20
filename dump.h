@@ -1,5 +1,5 @@
 //================================================================================
-// m1v_dec_eval - ¥Ç¡¼¥¿¥À¥ó¥×
+// m1v_dec_eval - ãƒ‡ãƒ¼ã‚¿ãƒ€ãƒ³ãƒ—
 // $Id$
 //================================================================================
 
@@ -9,11 +9,14 @@
 #include <stdio.h>
 
 // exports
-extern const char* dump_start(const char* ref_dir);
+extern const char* dump_init(const char* ref_dir);
+extern void dump_start();
 extern void dump_finish();
 extern void dump(FILE* fp, const char* desc, const char* fmt, ...);
 extern FILE* dump_slice;
 extern FILE* dump_mb;
+extern FILE* dump_block;
+extern FILE* dump_dequant;
 
 
 #endif	/* !_DUMP_H_ */
