@@ -5,10 +5,10 @@
 
 TARGET = m1vdec
 
-SOURCES = main.c ps.c bitstream.c video.c vlc.c dump.c
+SOURCES = main.c ps.c bitstream.c video.c vlc.c dump.c simple_idct.c
 
 CC = gcc
-CFLAGS = -Wall -std=c99
+CFLAGS = -Wall -std=c99 -lm
 
 OBJS = $(SOURCES:.c=.o)
 
@@ -19,12 +19,15 @@ all: $(TARGET)
 $(TARGET): $(OBJS)
 	$(CC) $(CFLAGS) -o $@ $^
 
-%.o: %.c
+%.o: %.c dump.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 dump.c dump.h: dump.rb
 	ruby $<
 
+simple_idct.c: simple_idct.rb
+	ruby $< > $@
+
 clean:
-	@rm -f $(OBJS) $(TARGET) dump.{c,h}
+	@rm -f $(OBJS) $(TARGET) dump.{c,h} simple_idct.c
 

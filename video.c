@@ -22,6 +22,7 @@ static const char* slice();
 static const char* macroblock();
 static const char* block(int bn);
 static const char* dequant(int bn);
+static const char* idct(int bn);
 
 int video_wd, video_ht;
 int nslice, nmb;
@@ -406,6 +407,9 @@ static const char* block(int bn)
 	// dequant
 	CALL(dequant(bn));
 
+	// idct
+	if(pat_code[bn]) CALL(idct(bn));
+
 	return NULL;
 }
 
@@ -460,6 +464,7 @@ const char* idct(int bn)
 {
 	// x_{i,j}= 2/N Σ_{k=0}^{N-1}Σ_{l=0}^{N-1}C(k)C(l)x_{k,l}cos(πk(2i+1)/2N)cos(πl(2j+1)/2N)
 	// N=8
+	/*
 	for(int j = 0; j < 8; ++j) for(int i = 0; i < 8; ++i)
 	{
 		double s = 0.0;
@@ -472,6 +477,10 @@ const char* idct(int bn)
 		}
 		sf[j][i] = (int)s;
 	}
+	*/
+	extern void simple_idct(int L[8][8], int S[8][8]);
+	simple_idct(lf, sf);
+
 	dump(dump_idct, NULL, "# slice %6d, mb %4d, block %d (%s)",
 		nslice, nmb, bn, blk_desc[bn]);
 	for(int y = 0; y < 8; ++y)
