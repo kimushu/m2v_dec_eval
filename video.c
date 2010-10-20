@@ -4,8 +4,11 @@
 // $Id$
 //================================================================================
 
+#define _GNU_SOURCE
+#define _USE_MATH_DEFINES
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include "m1vdec.h"
 #include "bitstream.h"
 #include "video.h"
@@ -453,4 +456,28 @@ static const char* dequant(int bn)
 }
 
 
+const char* idct(int bn)
+{
+	// x_{i,j}= 2/N Σ_{k=0}^{N-1}Σ_{l=0}^{N-1}C(k)C(l)x_{k,l}cos(πk(2i+1)/2N)cos(πl(2j+1)/2N)
+	// N=8
+	for(int j = 0; j < 8; ++j) for(int i = 0; i < 8; ++i)
+	{
+		double s = 0.0;
+		for(int k = 0; k < 8; ++k) for(int l = 0; l < 8; ++l)
+		{
+			double d = lf[l][k] * cos(M_PI * k * (2 * i + 1) / 16) * cos(M_PI * l * (2 * j + 1) / 16);
+			if(k == 0) d *= M_SQRT1_2;
+			if(l == 0) d *= M_SQRT1_2;
+			s += d;
+		}
+		sf[j][i] = (int)s;
+	}
+	dump(dump_idct, NULL, "# slice %6d, mb %4d, block %d (%s)",
+		nslice, nmb, bn, blk_desc[bn]);
+	for(int y = 0; y < 8; ++y)
+		dump(dump_idct, NULL, " %5d %5d %5d %5d %5d %5d %5d %5d",
+			sf[y][0], sf[y][1], sf[y][2], sf[y][3],
+			sf[y][4], sf[y][5], sf[y][6], sf[y][7]);
+	return NULL;
+}
 

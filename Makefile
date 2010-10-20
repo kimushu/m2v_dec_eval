@@ -22,6 +22,9 @@ $(TARGET): $(OBJS)
 %.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
 
+dump.c dump.h: dump.rb
+	ruby $<
+
 clean:
-	@rm -f $(OBJS) $(TARGET)
+	@rm -f $(OBJS) $(TARGET) dump.{c,h}
 
