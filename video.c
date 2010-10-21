@@ -1,5 +1,5 @@
 //================================================================================
-// m1v_dec_eval - MPEG1 ビデオ デコーダ
+// m2v_dec_eval - MPEG2 ビデオ デコーダ
 // ref: ISO13818-2?
 // $Id$
 //================================================================================
@@ -9,7 +9,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
-#include "m1vdec.h"
+#include "m2vdec.h"
 #include "bitstream.h"
 #include "video.h"
 #include "vlc.h"

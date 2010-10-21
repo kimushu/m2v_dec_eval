@@ -1,11 +1,11 @@
 //================================================================================
-// m1v_dec_eval - PS デコーダ
+// m2v_dec_eval - PS デコーダ
 // ref: ISO13818-1
 // $Id$
 //================================================================================
 
 #include <stdio.h>
-#include "m1vdec.h"
+#include "m2vdec.h"
 #include "ps.h"
 
 static const char* pack_header();

@@ -1,9 +1,9 @@
 #================================================================================
-# m1v_dec_eval - make
+# m2v_dec_eval - make
 # $Id$
 #================================================================================
 
-TARGET = m1vdec
+TARGET = m2vdec
 
 SOURCES = main.c ps.c bitstream.c video.c vlc.c dump.c simple_idct.c
 
