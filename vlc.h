@@ -24,8 +24,10 @@ extern const VLC_ENTRY vlc_table_b4[];
 extern const VLC_ENTRY vlc_table_b9[];
 extern const VLC_ENTRY vlc_table_b10[];
 extern const VLC_ENTRY vlc_table_b11[];
-extern const VLC_ENTRY vlc_table_dct_f[];
-extern const VLC_ENTRY vlc_table_dct_n[];
+extern const VLC_ENTRY vlc_table_b12[];
+extern const VLC_ENTRY vlc_table_b13[];
+extern const VLC_ENTRY vlc_table_dct0[];
+extern const VLC_ENTRY vlc_table_dct1[];
 
 
 #endif	/* !_VLC_H_ */

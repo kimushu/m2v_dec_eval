@@ -33,8 +33,8 @@ static const char* motion_vectors(int s);
 static const char* motion_vector(int r, int s);
 static const char* coded_block_pattern();
 static const char* block(int b);
-static const char* dequant(int b);
-static const char* idct(int b);
+// static const char* dequant(int b);
+// static const char* idct(int b);
 
 // sequence_header
 int horz_size, vert_size, aspect_ratio, frame_rate_code,
@@ -78,6 +78,9 @@ int mo_vert_field_select[2][2], mo_code[2][2][2], mo_residual[2][2][2],
 // coded block pattern
 int cbp420, cbp1, cbp2, pattern_code[12];
 
+// block
+int dct_dc_diff, dc_dct_pred[3];
+int QFS[64];
 
 static const char* const PCT_STRING = "0IPB4567";	// '4'=='D' if ISO11172-2
 static const char* const CHROMA_FMT_NAME[] = {"reserved", "4:2:0", "4:2:2", "4:4:4"};
@@ -416,6 +419,11 @@ static const char* picture_data()
 	return NULL;
 }
 
+static void reset_dc_dct_pred()
+{
+	dc_dct_pred[0] = dc_dct_pred[1] = dc_dct_pred[2] = (1 << (intra_dc_precision + 7));
+}
+
 static const char* slice()
 {
 	uint32_t n = bs_get(32);
@@ -441,7 +449,7 @@ static const char* slice()
 	}
 	else intra_slice = 0;
 	nmb = 0;
-	// dc_pred[0] = dc_pred[1] = dc_pred[2] = 128;
+	reset_dc_dct_pred();
 	do
 	{
 		CALL(macroblock());
@@ -458,6 +466,7 @@ static const char* macroblock()
 	printf("---- MACROBLOCK (S:%05d, M:%04d) ----\n", nslice, nmb);
 	while(bs_peek(11) == 0b00000001000) bs_get(11);	// escape
 	printf("mb_addr_inc: %d\n", mb_addr_inc = bs_vlc(vlc_table_b1));
+	if(mb_addr_inc > 1) reset_dc_dct_pred();
 	// dump(dump_mb, NULL, "# slice %6d, mb %4d", nslice, nmb);
 	// dump(dump_mb, "mb_addr_inc", " %2d", mb_addr_inc);
 	CALL(macroblock_modes());
@@ -492,7 +501,7 @@ static const char* macroblock_modes()
 	mb_mo_bw   = (mb_type >> 5) & 1;
 	mb_pattern = (mb_type >> 4) & 1;
 	mb_intra   = (mb_type >> 3) & 1;
-	// if(!mb_intra) dc_pred[0] = dc_pred[1] = dc_pred[2] = 128;
+	if(!mb_intra) reset_dc_dct_pred();
 	printf("mb_type: quant=%d, mo_fw=%d, mo_bw=%d, pattern=%d, intra=%d\n",
 		mb_quant, mb_mo_fw, mb_mo_bw, mb_pattern, mb_intra);
 	// TODO:spatial_temporal_weight_code
@@ -585,6 +594,32 @@ static const char* coded_block_pattern()
 
 static const char* block(int b)
 {
+	printf("---- BLOCK (S:%04d, M:%04d, B:%d) ----\n", nslice, nmb, b);
+	if(!pattern_code[b]) return NULL;
+	if(mb_intra)
+	{
+		int dct_diff;
+		int dct_dc_size = bs_vlc(b < 4 ? vlc_table_b12 : vlc_table_b13);
+		if(dct_dc_size > 0)
+		{
+			dct_dc_diff = bs_get(dct_dc_size);
+			int half_range = 1 << (dct_dc_size - 1);
+			if(dct_dc_diff >= half_range)
+				dct_diff = dct_dc_diff;
+			else
+				dct_diff = (dct_dc_diff + 1) - (2 * half_range);
+		}
+		else dct_dc_diff = dct_diff = 0;
+
+		int cc = (b < 4) ? 0 : (b % 2 + 1);
+		QFS[0] = dc_dct_pred[cc] + dct_diff;
+		dc_dct_pred[cc] = QFS[0];
+	}
+	else
+	{
+		// First DCT coefficient
+	}
+
 	return NULL;
 }
 
@@ -601,12 +636,12 @@ static const char* block(int bn)
 			if(bn < 4)
 			{
 				int dc_size_luma = bs_vlc(vlc_table_b5a);
-				if(dc_size_luma > 0) qfs[pos++] = bs_get(dc_size_luma) + dc_pred[0];
+				if(dc_size_luma > 0) qfs[pos++] = bs_get(dc_size_luma) + dc_dct_pred[0];
 			}
 			else
 			{
 				int dc_size_chroma = bs_vlc(vlc_table_b5b);
-				if(dc_size_chroma > 0) qfs[pos++] = bs_get(dc_size_chroma) + dc_pred[bn - 3];
+				if(dc_size_chroma > 0) qfs[pos++] = bs_get(dc_size_chroma) + dc_dct_pred[bn - 3];
 			}
 		}
 		else
