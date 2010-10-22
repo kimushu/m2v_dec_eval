@@ -16,59 +16,72 @@
 #include "dump.h"
 
 static const char* sequence_header();
+static const char* extension_and_user_data(int i);
+static const char* extension_data(int i);
+static const char* user_data();
 static const char* sequence_extension();
-static const char* sequence_display_extension();
-static const char* sequence_scalable_extension();
-static const char* gop_header();
-static const char* picture();
+//static const char* sequence_display_extension();
+//static const char* sequence_scalable_extension();
+static const char* group_of_pictures_header();
+static const char* picture_header();
+static const char* picture_coding_extension();
+static const char* picture_data();
 static const char* slice();
 static const char* macroblock();
 static const char* macroblock_modes();
 static const char* motion_vectors(int s);
 static const char* motion_vector(int r, int s);
-static const char* block(int bn);
-static const char* dequant(int bn);
-static const char* idct(int bn);
+static const char* coded_block_pattern();
+static const char* block(int b);
+static const char* dequant(int b);
+static const char* idct(int b);
 
-int video_wd, video_ht;
-int nslice, nmb;
-int max_slices, skip_slices;
-int pic_coding_type;
-int full_pel_fw_vector, full_pel_bw_vector;
-int fw_f_code, bw_f_code;
-int f_code[2][2];
-int intra_dc_precision;
-int picture_struct;
-int top_field_first;
-int frame_pred_frame_dct;
-int conceal_mv;
-int q_scale_type;
-int intra_vlc_fmt;
-int alt_scan;
-int rep_first_field;
-int chroma_420;
-int prog_frame;
-int v_axis;
-int field_seq;
-int sub_carrier;
-int burst_amp;
-int sub_car_phase;
-int quant_scale;
-int intra_slice;
-int mb_addr_inc, mb_type;
-int mb_quant, mb_mo_fw, mb_mo_bw, mb_pat, mb_intra;
-int mb_quant_scale;
-int mo_h_fw_code, mo_h_fw_r;
-int mo_v_fw_code, mo_v_fw_r;
-int mo_h_bw_code, mo_h_bw_r;
-int mo_v_bw_code, mo_v_bw_r;
-int dc_pred[3];		// 0:Y, 1:Cb, 2:Cr
-int pat_code[6];
-int qfs[64], qf[8][8], lf[8][8], sf[8][8], d[8][8];
+// sequence_header
+int horz_size, vert_size, aspect_ratio, frame_rate_code,
+	frame_rate_n, frame_rate_d,
+	bitrate_value, vbv_buf_size, const_param_flag;
 int intra_qmat[8][8], nonintra_qmat[8][8];
 
-static const char* const pct_string = "0IPBD567";
-static const char* const blk_desc[6] = {"Y0", "Y1", "Y2", "Y3", "Cb", "Cr"};
+// extension data
+int seq_scalable;
+
+// seq extension
+int prof_and_level, prog_seq, chroma_fmt, low_delay, block_count;
+
+// gop header
+int time_code, closed_gop, broken_link;
+
+// picture header
+int temp_ref, pic_coding_type, vbv_delay,
+	full_pel_fw_vector, fw_f_code, full_pel_bw_vector, bw_f_code;
+
+// picture coding extension
+int f_code[2][2], intra_dc_precision, picture_struct, top_field_first,
+	frame_pred_frame_dct, conceal_mv, q_scale_type, intra_vlc_fmt,
+	alt_scan, rep_first_field, chroma_420_type, prog_frame,
+	v_axis, field_seq, sub_carrier, burst_amp, sub_car_phase;
+
+// slice
+int nslice, max_slices, skip_slices;
+int q_scale_code, intra_slice;
+
+// macroblock
+int nmb;
+int mb_addr_inc, mb_quant, mb_q_scale_code, mb_mo_fw, mb_mo_bw,
+	mb_pattern, mb_intra;
+int field_mo_type, frame_mo_type, dct_type, mv_count, mv_format, dmv;
+
+// motion vectors
+int mo_vert_field_select[2][2], mo_code[2][2][2], mo_residual[2][2][2],
+	dmvector[2];
+
+// coded block pattern
+int cbp420, cbp1, cbp2, pattern_code[12];
+
+
+static const char* const PCT_STRING = "0IPB4567";	// '4'=='D' if ISO11172-2
+static const char* const CHROMA_FMT_NAME[] = {"reserved", "4:2:0", "4:2:2", "4:4:4"};
+static const int BLK_COUNT[4] = {0, 6, 8, 12};
 static const int zigzag_scan[8][8] = {
 	{ 0, 1, 5, 6, 14, 15, 27, 28 },
 	{ 2, 4, 7, 13, 16, 26, 29, 42 },
@@ -102,6 +115,21 @@ static const int def_intra_qmat[8][8] = {
 	system start codes   b9-ff
 */
 
+#define PICTURE_START_CODE	0x00000100
+#define UDATA_START_CODE	0x000001b2
+#define SEQ_HEADER_CODE		0x000001b3
+#define SEQ_ERROR_CODE		0x000001b4
+#define EXT_START_CODE		0x000001b5
+#define SEQ_END_CODE		0x000001b7
+#define GROUP_START_CODE	0x000001b8
+
+#define SEQ_EXT_ID			0b0001
+#define PIC_CODE_EXT_ID		0b1000
+
+#define PIC_STRUCT_TOPF		1
+#define PIC_STRUCT_BTMF		2
+#define PIC_STRUCT_FRAME	3
+
 const char* decode_video(const char* ref_dir, int slices, int skips)
 {
 	max_slices = slices;
@@ -116,107 +144,150 @@ const char* decode_video(const char* ref_dir, int slices, int skips)
 	do
 	{
 		CALL(sequence_header());
-		if(bs_peek(32) != 0x000001b5)
+		if(bs_peek(32) != EXT_START_CODE)
 			return "stream is mpeg1video! (not supported)";	// ISO11172-2
-		CALL(sequence_extension());
-		while(bs_peek(32) == 0x000001b5)
-		{
-			bs_get(32);
-			if(bs_peek(4) == 0b0010)
-				CALL(sequence_display_extension());
-			else
-				CALL(sequence_scalable_extension());
-		}
 
+		CALL(sequence_extension());
+		CALL(extension_and_user_data(0));
 		do
 		{
-			if(bs_peek(32) == 0x000001b8)
+			if(bs_peek(32) == GROUP_START_CODE)
 			{
-				CALL(gop_header());
+				CALL(group_of_pictures_header());
+				CALL(extension_and_user_data(1));
 			}
-			CALL(picture());
+			CALL(picture_header());
+			CALL(picture_coding_extension());
+			CALL(extension_and_user_data(2));
+			CALL(picture_data());
 			n = bs_peek(32);
 		}
-		while(n == 0x00000100 || n == 0x000001b8);
+		while(n == PICTURE_START_CODE || n == GROUP_START_CODE);
 	}
-	while(n != 0x000001b7);
+	while(n != SEQ_END_CODE);
+	bs_get(32);
 	dump_finish();
 	return NULL;
 }
 
 static const char* sequence_header()
 {
-	bs_get(32);
-	printf("---- SEQUENCE HEADER ----\n");
-	video_wd = bs_get(12);
-	video_ht = bs_get(12);
-	printf("size: %d x %d\n", video_wd, video_ht);
-	printf("aspect_ratio: %u\n", bs_gets(4));
-	printf("picture_rate: %u\n", bs_gets(4));
-	printf("bitrate: %u\n", bs_get(18));
+	uint32_t n = bs_get(32);
+	printf("---- SEQUENCE HEADER (0x%08x) ----\n", n);
+	seq_scalable = 0;	// init
+	if(n != SEQ_HEADER_CODE) return "illegal SEQ_HEADER_CODE";
+	horz_size = bs_get(12);
+	vert_size = bs_get(12);
+	printf("size: %d x %d\n", horz_size, vert_size);
+	printf("aspect_ratio: %u\n", aspect_ratio = bs_gets(4));
+	printf("frame_rate_code: %u\n", frame_rate_code = bs_gets(4));
+	frame_rate_d = 1;
+	switch(frame_rate_code)
+	{
+	case 1: frame_rate_n = 24000; frame_rate_d = 1001; break;
+	case 2: frame_rate_n = 24; break;
+	case 3: frame_rate_n = 25; break;
+	case 4: frame_rate_n = 30000; frame_rate_d = 1001; break;
+	case 5: frame_rate_n = 30; break;
+	case 6: frame_rate_n = 50; break;
+	case 7: frame_rate_n = 60000; frame_rate_d = 1001; break;
+	case 8: frame_rate_n = 60; break;
+	default: return "illegal frame_rate_code!";
+	}
+	printf("frame_rate: %lf (%u/%u)\n", (double)frame_rate_n / frame_rate_d,
+		frame_rate_n, frame_rate_d);
+	printf("bitrate: %u\n", bitrate_value = bs_get(18));
 	if(bs_gets(1) != 0b1) return "illegal marker-bit (seqh)";
-	printf("vbv_buf_size: %u\n", bs_get(10));
-	printf("const_param_flag: %u\n", bs_gets(1));
+	printf("vbv_buf_size: %u\n", vbv_buf_size = bs_get(10));
+	printf("const_param_flag: %u\n", const_param_flag = bs_gets(1));
 	if(bs_gets(1) == 0b1)
 	{
-		printf("intra_quant_matrix:");
+		printf("intra_quant_matrix:\n");
 		for(int i = 0; i < 64; ++i)
-		{
-			if(i > 0 && !(i & 7)) printf("                   ");
-			printf(" %3d", intra_qmat[0][i] = bs_gets(8));
-			if((i & 7) == 7) printf("\n");
-		}
+			printf(" %3d%s", intra_qmat[0][i] = bs_gets(8),
+				(i & 7) == 7 ? "\n" : "");
 	}
 	else memcpy(intra_qmat, def_intra_qmat, sizeof(intra_qmat));
 	if(bs_gets(1) == 0b1)
 	{
 		printf("non_intra_quant_matrix:");
 		for(int i = 0; i < 64; ++i)
-		{
-			if(i > 0 && !(i & 7)) printf("                       ");
-			printf(" %3d", nonintra_qmat[0][i] = bs_gets(8));
-			if((i & 7) == 7) printf("\n");
-		}
+			printf(" %3d%s", nonintra_qmat[0][i] = bs_gets(8),
+				(i & 7) == 7 ? "\n" : "");
 	}
 	else for(int i = 0; i < 64; ++i) nonintra_qmat[0][i] = 16;
+	bs_align(8);
+	bs_nextcode(0x000001, 3);
+	return NULL;
+}
+
+static const char* extension_and_user_data(int i)
+{
+	uint32_t n = bs_peek(32);
+	while(n == EXT_START_CODE || n == UDATA_START_CODE)
+	{
+		if(n == EXT_START_CODE && i != 1)
+			CALL(extension_data(i));
+		else if(n == UDATA_START_CODE)
+			CALL(user_data());
+	}
+	return NULL;
+}
+
+static const char* extension_data(int i)
+{
+	while(bs_peek(32) == EXT_START_CODE)
+	{
+		bs_get(32);
+		if(i == 0)
+		{
+			return "not implemented (display/scalable extension)";
+		}
+		else if(i == 2)
+		{
+			return "not implemented (quant/cr/picdisp/picspa/pictemp extension)";
+		}
+	}
+	return NULL;
+}
+
+static const char* user_data()
+{
+	uint32_t n = bs_get(32);
+	printf("---- USER DATA (0x%08x) ----\n", n);
+	if(n != UDATA_START_CODE) return "illegal UDATA_START_CODE";
+	int i = bs_nextcode(0x000001, 3);
+	printf("user_data: %d bytes\n", i);
 	return NULL;
 }
 
 static const char* sequence_extension()
 {
-	if(bs_get(32) != 0x000001b5) return "illegal ext_start_code";
-/*	int ext_id = bs_gets(4);
-	switch(ext_id)
-	{
-	case 0b0001:	// Sequence Extension
-	case 0b0010:	// Sequence Display Extension
-	case 0b0011:	// Quant Matrix Extension
-	case 0b0100:	// Copyright Extension
-	case 0b0101:	// Sequence Scalable Extension
-	case 0b0111:	// Picture Display Extension
-	case 0b1000:	// Picture Coding Extension
-	case 0b1001:	// Picture Spatial Scalable Extension
-	case 0b1010:	// Picture Temporal Scalable Extension
-	default:
-		return "illegal extension id";
-	}*/
-	printf("---- SEQUENCE EXTENSION ----\n");
-	if(bs_gets(4) != 0b0001) return "illegal extension id (!=0b0001)";
-	printf("profile: %u\n", bs_gets(8));
-	printf("prog_seq: %u\n", bs_gets(1));
-	printf("chroma_format: %u\n", bs_gets(2));
-	printf("horz_size_ext: %u\n", bs_gets(2));
-	printf("vert_size_ext: %u\n", bs_gets(2));
-	printf("bitrate_ext: %u\n", bs_get(12));
-	if(bs_gets(1) != 0b1) return "illegal marker-bit (s-ext)";
-	printf("vbv_buf_size_ext: %u\n", bs_gets(8));
-	printf("low_delay: %u\n", bs_gets(1));
-	printf("frame_rate_ext_n: %u\n", bs_gets(2));
-	printf("frame_rate_ext_d: %u\n", bs_gets(5));
+	uint32_t n = bs_get(32);
+	printf("---- SEQUENCE EXTENSION (0x%08x) ----\n", n);
+	if(n != EXT_START_CODE) return "illegal EXT_START_CODE";
+	if(bs_gets(4) != SEQ_EXT_ID) return "illegal extension id (SEQ_EXT_ID)";
+	printf("profile_and_level: %u\n", prof_and_level = bs_gets(8));
+	printf("prog_seq: %u\n", prog_seq = bs_gets(1));
+	chroma_fmt = bs_gets(2);
+	printf("chroma_format: %u (%s)\n", chroma_fmt, CHROMA_FMT_NAME[chroma_fmt]);
+	block_count = BLK_COUNT[chroma_fmt];
+	printf("horz_size w/ext: %u\n", horz_size += (bs_gets(2) << 12));
+	printf("vert_size w/ext: %u\n", vert_size += (bs_gets(2) << 12));
+	printf("bitrate w/ext: %u\n", bitrate_value += (bs_get(12) << 18));
+	if(bs_gets(1) != 0b1) return "illegal marker-bit (seq-ext)";
+	printf("vbv_buf_size w/ext: %u\n", vbv_buf_size += (bs_gets(8) << 10));
+	printf("low_delay: %u\n", low_delay = bs_gets(1));
+	frame_rate_n *= (bs_gets(2) + 1);
+	frame_rate_d *= (bs_gets(5) + 1);
+	printf("frame_rate w/ext: %lf (%u/%u)\n", (double)frame_rate_n / frame_rate_d,
+		frame_rate_n, frame_rate_d);
+	bs_align(8);
 	bs_nextcode(0x000001, 3);
 	return NULL;
 }
 
+/*
 static const char* sequence_display_extension()
 {
 	if(bs_gets(4) != 0b0010) return "illegal extension id (!=0b0010)";
@@ -249,28 +320,29 @@ static const char* sequence_scalable_extension()
 	bs_nextcode(0x000001, 3);
 	return NULL;
 }
+*/
 
-static const char* gop_header()
+static const char* group_of_pictures_header()
 {
-	if(bs_get(32) != 0x000001b8) return "illegal group_start_code";
-	printf("---- GROUP OF PICTURE HEADER ----\n");
-	printf("time_code: %u\n", bs_get(25));
-	printf("closed_gop: %u\n", bs_gets(1));
-	printf("broken_link: %u\n", bs_gets(1));
+	uint32_t n = bs_get(32);
+	printf("---- GROUP OF PICTURE HEADER (0x%08x) ----\n", n);
+	if(n != GROUP_START_CODE) return "illegal GROUP_START_CODE";
+	printf("time_code: %u\n", time_code = bs_get(25));
+	printf("closed_gop: %u\n", closed_gop = bs_gets(1));
+	printf("broken_link: %u\n", broken_link = bs_gets(1));
 	bs_align(8);
 	bs_nextcode(0x000001, 3);
 	return NULL;
 }
 
-static const char* picture()
+static const char* picture_header()
 {
-	if(bs_get(32) != 0x00000100) return "illegal picture start code";
-	printf("---- PICTURE ----\n");
-
-	// picture header
-	printf("temp_ref: %u\n", bs_get(10));
+	uint32_t n = bs_get(32);
+	printf("---- PICTURE HEADER (0x%08x) ----\n", n);
+	if(n != PICTURE_START_CODE) return "illegal PICTURE_START_CODE";
+	printf("temp_ref: %u\n", temp_ref = bs_get(10));
 	pic_coding_type = bs_gets(3);
-	printf("pic_coding_type: %d (%c)\n", pic_coding_type, pct_string[pic_coding_type]);
+	printf("pic_coding_type: %d (%c)\n", pic_coding_type, PCT_STRING[pic_coding_type]);
 	printf("vbv_delay: %u\n", bs_get(16));
 	if(pic_coding_type == 2 || pic_coding_type == 3)
 	{
@@ -292,10 +364,15 @@ static const char* picture()
 	if(ei) printf("\n");
 	bs_align(8);
 	bs_nextcode(0x000001, 3);
+	return NULL;
+}
 
-	// picture_coding_ext
-	if(bs_get(32) != 0x000001b5) return "illegal picture coding ext start code";
-	if(bs_gets(4) != 0b1000) return "illegal ext id (!=0b1000)";
+static const char* picture_coding_extension()
+{
+	uint32_t n = bs_get(32);
+	printf("---- PICTURE CODING EXTENSION (0x%08x:%x) ----\n", n, bs_peek(4));
+	if(n != EXT_START_CODE) return "illegal EXT_START_CODE";
+	if(bs_gets(4) != PIC_CODE_EXT_ID) return "illegal ext id (PIC_CODE_EXT_ID)";
 	f_code[0][0] = bs_gets(4);
 	f_code[0][1] = bs_gets(4);
 	f_code[1][0] = bs_gets(4);
@@ -311,7 +388,7 @@ static const char* picture()
 	printf("intra_vlc_fmt: %u\n", intra_vlc_fmt = bs_gets(1));
 	printf("alt_scan: %u\n", alt_scan = bs_gets(1));
 	printf("rep_first_field: %u\n", rep_first_field = bs_gets(1));
-	printf("chroma_420_type: %u\n", chroma_420 = bs_gets(1));
+	printf("chroma_420_type: %u\n", chroma_420_type = bs_gets(1));
 	printf("prog_frame: %u\n", prog_frame = bs_gets(1));
 	if(bs_gets(1) == 0b1)
 	{
@@ -323,41 +400,32 @@ static const char* picture()
 	}
 	bs_align(8);
 	bs_nextcode(0x000001, 3);
+	return NULL;
+}
 
-	// ext_user_data(2)
-	while(bs_peek(32) == 0x000001b5)
-	{
-		// TODO
-		printf("---- PICTURE other EXTENSION DATA ----\n");
-		printf("skipped...\n");
-		bs_get(32);
-		bs_nextcode(0x000001, 3);
-	}
-
-	// CALL(picture_data());
+static const char* picture_data()
+{
 	uint32_t n;
-	// nslice = 0;
 	do
 	{
 		CALL(slice());
 		if(nslice == max_slices) return NULL;
 		n = bs_peek(32);
 	}
-	while(0x00000101 <= n && n <= 0x000001af);
+	while(n == PICTURE_START_CODE);
 	return NULL;
 }
 
-
 static const char* slice()
 {
-	uint32_t v = bs_get(32);
+	uint32_t n = bs_get(32);
 	if(nslice == skip_slices) dump_start();
-	printf("---- SLICE (0x%08x, S:%04d) ----\n", v, nslice);
-	if(video_ht > 2800) return "video too large!";
-	// TODO scalable
-	printf("quant_scale: %d\n", quant_scale = bs_gets(5));
-	dump(dump_slice, NULL, "# slice %6d", nslice);
-	dump(dump_slice, "quant_scale", " %2d", quant_scale);
+	printf("---- SLICE (0x%08x, S:%04d) ----\n", n, nslice);
+	if(vert_size > 2800)
+		return "video too large!"; // slice_vertical_position_extension
+	if(seq_scalable)
+		return "scalable is not supported!";
+	printf("q_scale_code: %u\n", q_scale_code = bs_gets(5));
 	if(bs_gets(1) == 0b1)
 	{
 		printf("intra_slice: %u\n", intra_slice = bs_gets(1));
@@ -373,7 +441,7 @@ static const char* slice()
 	}
 	else intra_slice = 0;
 	nmb = 0;
-	dc_pred[0] = dc_pred[1] = dc_pred[2] = 128;
+	// dc_pred[0] = dc_pred[1] = dc_pred[2] = 128;
 	do
 	{
 		CALL(macroblock());
@@ -385,88 +453,74 @@ static const char* slice()
 	return NULL;
 }
 
-
 static const char* macroblock()
 {
 	printf("---- MACROBLOCK (S:%05d, M:%04d) ----\n", nslice, nmb);
-	while(bs_peek(11) == 0b00000001000) bs_get(11);
+	while(bs_peek(11) == 0b00000001000) bs_get(11);	// escape
 	printf("mb_addr_inc: %d\n", mb_addr_inc = bs_vlc(vlc_table_b1));
-	dump(dump_mb, NULL, "# slice %6d, mb %4d", nslice, nmb);
-	dump(dump_mb, "mb_addr_inc", " %2d", mb_addr_inc);
+	// dump(dump_mb, NULL, "# slice %6d, mb %4d", nslice, nmb);
+	// dump(dump_mb, "mb_addr_inc", " %2d", mb_addr_inc);
 	CALL(macroblock_modes());
-	if(mb_quant) printf("mb_quant_scale: %d\n", mb_quant_scale = bs_gets(5));
-	else mb_quant_scale = 0;
-	dump(dump_mb, "type qua mofw mobw pat intra", " %d %d %d %d %d %d %2d",
-		pic_coding_type, mb_quant, mb_mo_fw, mb_mo_bw, mb_pat, mb_intra,
-		mb_quant ? mb_quant_scale : 0);
-	if(mb_mo_fw)
-	{
-		printf("mo_h_fw_code: %d\n", mo_h_fw_code = bs_vlc(vlc_table_b4));
-		if(mo_h_fw_code != 0 && fw_f_code > 1)
-			printf("mo_h_fw_r: %d\n", mo_h_fw_r = bs_get(fw_f_code - 1));
-		printf("mo_v_fw_code: %d\n", mo_v_fw_code = bs_vlc(vlc_table_b4));
-		if(mo_v_fw_code != 0 && fw_f_code > 1)
-			printf("mo_v_fw_r: %d\n", mo_v_fw_r = bs_get(fw_f_code - 1));
-	}
-	else mo_h_fw_code = mo_h_fw_r = mo_v_fw_code = mo_v_fw_r = 0;
-	dump(dump_mb, "mo_h_fw mo_v_fw", " %3d %3d %3d %3d",
-		mo_h_fw_code, mo_h_fw_r, mo_v_fw_code, mo_v_fw_r);
-	if(mb_mo_bw)
-	{
-		printf("mo_h_bw_code: %d\n", mo_h_bw_code = bs_vlc(vlc_table_b4));
-		if(mo_h_bw_code != 0 && bw_f_code > 1)
-			printf("mo_h_bw_r: %d\n", mo_h_bw_r = bs_get(bw_f_code - 1));
-		printf("mo_v_bw_code: %d\n", mo_v_bw_code = bs_vlc(vlc_table_b4));
-		if(mo_v_bw_code != 0 && bw_f_code > 1)
-			printf("mo_v_bw_r: %d\n", mo_v_bw_r = bs_get(bw_f_code - 1));
-	}
-	else mo_h_bw_code = mo_h_bw_r = mo_v_bw_code = mo_v_bw_r = 0;
-	dump(dump_mb, "mo_h_bw mo_v_bw", " %3d %3d %3d %3d",
-		mo_h_bw_code, mo_h_bw_r, mo_v_bw_code, mo_v_bw_r);
-	for(int i = 0; i < 6; ++i) pat_code[i] = mb_intra;
-	if(mb_pat)
-	{
-		int coded_blk_pat = bs_vlc(vlc_table_b3);
-		for(int i = 0; i < 6; ++i)
-			if(coded_blk_pat & (1<<(5-i))) pat_code[i] = 1;
-	}
-	printf("pat_code:");
-	for(int i = 0; i < 6; ++i) printf(" %d", pat_code[i]);
-	dump(dump_mb, "pat_luma pat_chroma", " %d%d%d%d %d%d",
-		pat_code[0], pat_code[1], pat_code[2], pat_code[3], pat_code[4], pat_code[5]);
-	printf("\n");
-
-	for(int i = 0; i < 6; ++i) CALL(block(i));
-
-	if(pic_coding_type == 4 && bs_gets(1) != 0b1)
-		return "illegal end-of-mb (D)";
-
-	nmb++;
+	if(mb_quant) printf("mb_q_scale_code: %d\n", mb_q_scale_code = bs_gets(5));
+	else mb_q_scale_code = 0;
+	if(mb_mo_fw || (mb_intra && conceal_mv)) CALL(motion_vectors(0));
+	if(mb_mo_bw) CALL(motion_vectors(1));
+	if(mb_intra && conceal_mv && bs_gets(1) != 0b1)
+		return "illegal marker-bit (mb)";
+	if(mb_pattern) CALL(coded_block_pattern());
+	for(int b = 0; b < block_count; ++b) CALL(block(b));
 	return NULL;
 }
 
 static const char* macroblock_modes()
 {
-	// TODO: scalable
+	if(seq_scalable) return "scalable is not supported!"; // TODO: scalable
+	int mb_type;
 	switch(pic_coding_type)
 	{
-	case 0b001:		// I
-		mb_type = bs_vlc(vlc_table_b2a); break;
-	case 0b010:		// P
-		mb_type = bs_vlc(vlc_table_b2b); break;
-	case 0b011:		// B
-		mb_type = bs_vlc(vlc_table_b2c); break;
-	case 0b100:		// D
-		mb_type = bs_vlc(vlc_table_b2d); break;
+	case 1:		// I
+		mb_type = bs_vlc(vlc_table_b2); break;
+	case 2:		// P
+		mb_type = bs_vlc(vlc_table_b3); break;
+	case 3:		// B
+		mb_type = bs_vlc(vlc_table_b4); break;
+	default:
+		return "unknown pic_coding_type";
 	}
-	mb_quant = (mb_type >> 4) & 1;
-	mb_mo_fw = (mb_type >> 3) & 1;
-	mb_mo_bw = (mb_type >> 2) & 1;
-	mb_pat   = (mb_type >> 1) & 1;
-	mb_intra = (mb_type >> 0) & 1;
-	if(!mb_intra) dc_pred[0] = dc_pred[1] = dc_pred[2] = 128;
-	printf("mb_type: quant=%d, mo_fw=%d, mo_bw=%d, pat=%d, intra=%d\n",
-		mb_quant, mb_mo_fw, mb_mo_bw, mb_pat, mb_intra);
+	mb_quant   = (mb_type >> 7) & 1;
+	mb_mo_fw   = (mb_type >> 6) & 1;
+	mb_mo_bw   = (mb_type >> 5) & 1;
+	mb_pattern = (mb_type >> 4) & 1;
+	mb_intra   = (mb_type >> 3) & 1;
+	// if(!mb_intra) dc_pred[0] = dc_pred[1] = dc_pred[2] = 128;
+	printf("mb_type: quant=%d, mo_fw=%d, mo_bw=%d, pattern=%d, intra=%d\n",
+		mb_quant, mb_mo_fw, mb_mo_bw, mb_pattern, mb_intra);
+	// TODO:spatial_temporal_weight_code
+	if(mb_mo_fw || mb_mo_bw)
+	{
+		if(picture_struct != PIC_STRUCT_FRAME)
+			printf("field_mo_type: %d\n", field_mo_type = bs_gets(2));
+		else if(frame_pred_frame_dct == 0)
+		{
+			int stwc = 0;	// TODO
+			switch(frame_mo_type = bs_gets(2))
+			{
+			case 1: if(stwc <= 1) {
+					mv_count = 1; mv_format = 'i'; dmv = 0;
+					} else {
+					mv_count = 1; mv_format = 'i'; dmv = 0; } break;
+			case 2: mv_count = 1; mv_format = 'r'; dmv = 0; break;
+			case 3: mv_count = 1; mv_format = 'i'; dmv = 1; break;
+			default: return "illegal frame_mo_type";
+			}
+			printf("frame_mo_type: %d\n", frame_mo_type);
+			if(frame_mo_type != 2)
+				return "non-frame-based prediction is not supported";
+		}
+	}
+	if(picture_struct == PIC_STRUCT_FRAME && frame_pred_frame_dct == 0
+		&& (mb_intra || mb_pattern))
+		printf("dct_type: %d\n", dct_type = bs_gets(1));
 	return NULL;
 }
 
@@ -474,23 +528,67 @@ static const char* motion_vectors(int s)
 {
 	if(mv_count == 1)
 	{
-		if(mv_format == field && dmv != 1)
-			mv_field_select[0][s] = bs_gets(1);
+		if(mv_format == 'i' && dmv != 1)
+			mo_vert_field_select[0][s] = bs_gets(1);
 		CALL(motion_vector(0, s));
 	}
 	else
 	{
-		mv_field_select[0][s] = bs_gets(1);
+		mo_vert_field_select[0][s] = bs_gets(1);
 		CALL(motion_vector(0, s));
-		mv_field_select[1][s] = bs_gets(1);
+		mo_vert_field_select[1][s] = bs_gets(1);
 		CALL(motion_vector(1, s));
 	}
+	return NULL;
 }
 
 static const char* motion_vector(int r, int s)
 {
+	for(int t = 0; t < 2; ++t)
+	{
+		printf("mo_code[%d][%d][%d]: %d\n",
+			r, s, t, mo_code[r][s][t] = bs_vlc(vlc_table_b10));
+		if(f_code[s][t] != 1 && mo_code[r][s][t] != 0)
+			printf("mo_residual[%d][%d][%d]: %d\n",
+				r, s, t, mo_residual[r][s][t] = bs_get(f_code[s][t] - 1));
+		if(dmv)
+			printf("dmvector[%d]: %d\n",
+				t, dmvector[t] = bs_vlc(vlc_table_b11));
+	}
+	return NULL;
 }
 
+static const char* coded_block_pattern()
+{
+	printf("cbp420: %d\n", cbp420 = bs_vlc(vlc_table_b9));
+	if(chroma_fmt == 2)	// 4:2:2
+		printf("cbp1: %d\n", cbp1 = bs_gets(2));
+	if(chroma_fmt == 3)	// 4:4:4
+		printf("cbp2: %d\n", cbp1 = bs_gets(6));
+
+	for(int i = 0; i < 12; ++i) pattern_code[i] = mb_intra;
+	if(mb_pattern)
+	{
+		for(int i = 0; i < 6; ++i) if(cbp420 & (1 << (5-i))) pattern_code[i] = 1;
+		if(chroma_fmt == 2)	// 4:2:2
+			for(int i = 6; i < 8; ++i)
+				if(cbp1 & (1 << (7-i))) pattern_code[i] = 1;
+		if(chroma_fmt == 3)	// 4:4:4
+			for(int i = 6; i < 12; ++i)
+				if(cbp2 & (1 << (11-i))) pattern_code[i] = 1;
+	}
+	printf("pattern_code:");
+	for(int i = 0; i < block_count; ++i) printf(" %d", pattern_code[i]);
+	printf("\n");
+	return NULL;
+}
+
+static const char* block(int b)
+{
+	return NULL;
+}
+
+/*
 static const char* block(int bn)
 {
 	memset(qfs, 0, sizeof(qfs));
@@ -630,7 +728,7 @@ const char* idct(int bn)
 {
 	// x_{i,j}= 2/N Σ_{k=0}^{N-1}Σ_{l=0}^{N-1}C(k)C(l)x_{k,l}cos(πk(2i+1)/2N)cos(πl(2j+1)/2N)
 	// N=8
-	/*
+	/-*
 	for(int j = 0; j < 8; ++j) for(int i = 0; i < 8; ++i)
 	{
 		double s = 0.0;
@@ -643,7 +741,7 @@ const char* idct(int bn)
 		}
 		sf[j][i] = (int)s;
 	}
-	*/
+	*-/
 	extern void simple_idct(int L[8][8], int S[8][8]);
 	simple_idct(lf, sf);
 
@@ -655,4 +753,6 @@ const char* idct(int bn)
 			sf[y][4], sf[y][5], sf[y][6], sf[y][7]);
 	return NULL;
 }
+*/
+
 

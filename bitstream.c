@@ -161,7 +161,7 @@ int bs_vlc(const VLC_ENTRY* table)
 			(c >> 31) & 1, (c >> 30) & 1, (c >> 29) & 1, (c >> 28) & 1);
 		c <<= 4;
 	}
-	fprintf(stderr, "\nposition: 0x%x bytes (+%d bits)\n",
+	fprintf(stderr, ")\nposition: 0x%x bytes (+%d bits)\n",
 		g_total_bits / 8, g_total_bits % 8);
 	exit(1);
 	return 0;

@@ -5,6 +5,7 @@
 
 #include "vlc.h"
 
+// Macroblock addressing
 const VLC_ENTRY vlc_table_b1[] =
 {
 	{ 0b1,           1,  1  },
@@ -45,48 +46,84 @@ const VLC_ENTRY vlc_table_b1[] =
 	{ 0, 0, 0 },
 };
 
-const VLC_ENTRY vlc_table_b2a[] =
+// for I pictures
+const VLC_ENTRY vlc_table_b2[] =
 {
-	{ 0b1,  1, 0b00001},
-	{ 0b01, 2, 0b10001},
+	//           +--------Quant
+	//           |+-------MoFw
+	//           ||+------MoBw
+	//           |||+-----Pat
+	//           ||||+----Intra
+	//           |||||+---STWF
+	//           ||||||+--PermittedSTW(1,2,3)
+	//           |||||||+-PermittedSTW(4)
+	//           ||||||||
+	{ 0b1,  1, 0b00001000 },
+	{ 0b01, 2, 0b10001000 },
 	{ 0, 0, 0 },
 };
 
-const VLC_ENTRY vlc_table_b2b[] =
-{
-	{ 0b1,      1, 0b01010 },
-	{ 0b01,     2, 0b00010 },
-	{ 0b001,    3, 0b01000 },
-	{ 0b00011,  5, 0b00001 },
-	{ 0b00010,  5, 0b11010 },
-	{ 0b00001,  5, 0b10010 },
-	{ 0b000001, 6, 0b10001 },
-	{ 0, 0, 0 },
-};
-
-const VLC_ENTRY vlc_table_b2c[] =
-{
-	{ 0b10,     2, 0b01100 },
-	{ 0b11,     2, 0b01110 },
-	{ 0b010,    3, 0b00100 },
-	{ 0b011,    3, 0b00110 },
-	{ 0b0010,   4, 0b01000 },
-	{ 0b0011,   4, 0b01010 },
-	{ 0b00011,  5, 0b00001 },
-	{ 0b00010,  5, 0b11110 },
-	{ 0b000011, 6, 0b11010 },
-	{ 0b000010, 6, 0b10110 },
-	{ 0b000001, 6, 0b10001 },
-	{ 0, 0, 0 },
-};
-
-const VLC_ENTRY vlc_table_b2d[] =
-{
-	{ 0b1, 1, 0b00001 },
-	{ 0, 0, 0 },
-};
-
+// for P pictures
 const VLC_ENTRY vlc_table_b3[] =
+{
+	//               +--------Quant
+	//               |+-------MoFw
+	//               ||+------MoBw
+	//               |||+-----Pat
+	//               ||||+----Intra
+	//               |||||+---STWF
+	//               ||||||+--PermittedSTW(1,2,3)
+	//               |||||||+-PermittedSTW(4)
+	//               ||||||||
+	{ 0b1,      1, 0b01010000 },
+	{ 0b01,     2, 0b00010000 },
+	{ 0b001,    3, 0b01000000 },
+	{ 0b00011,  5, 0b00001000 },
+	{ 0b00010,  5, 0b11010000 },
+	{ 0b00001,  5, 0b10010000 },
+	{ 0b000001, 6, 0b10001000 },
+	{ 0, 0, 0 },
+};
+
+// for B pictures
+const VLC_ENTRY vlc_table_b4[] =
+{
+	//               +--------Quant
+	//               |+-------MoFw
+	//               ||+------MoBw
+	//               |||+-----Pat
+	//               ||||+----Intra
+	//               |||||+---STWF
+	//               ||||||+--PermittedSTW(1,2,3)
+	//               |||||||+-PermittedSTW(4)
+	//               ||||||||
+	{ 0b10,     2, 0b01100000 },
+	{ 0b11,     2, 0b01110000 },
+	{ 0b010,    3, 0b00100000 },
+	{ 0b011,    3, 0b00110000 },
+	{ 0b0010,   4, 0b01000000 },
+	{ 0b0011,   4, 0b01010000 },
+	{ 0b00011,  5, 0b00001000 },
+	{ 0b00010,  5, 0b11110000 },
+	{ 0b000011, 6, 0b11010000 },
+	{ 0b000010, 6, 0b10110000 },
+	{ 0b000001, 6, 0b10001000 },
+	{ 0, 0, 0 },
+};
+
+// for I pictures with spatial scalability
+// const VLC_ENTRY vlc_table_b5[] =
+
+// for P pictures with spatial scalability
+// const VLC_ENTRY vlc_table_b6[] =
+
+// for B pictures with spatial scalability
+// const VLC_ENTRY vlc_table_b7[] =
+
+// for I,P,B pictures with SNR scalability
+// const VLC_ENTRY vlc_table_b8[] =
+
+const VLC_ENTRY vlc_table_b9[] =
 {
 	{ 0b111,       3, 60 },
 	{ 0b1101,      4,  4 },
@@ -151,10 +188,12 @@ const VLC_ENTRY vlc_table_b3[] =
 	{ 0b000000100, 9, 59 },
 	{ 0b000000011, 9, 27 },
 	{ 0b000000010, 9, 39 },
+	{ 0b000000001, 9,  0 },
 	{ 0, 0, 0 },
 };
 
-const VLC_ENTRY vlc_table_b4[] =
+// motion_code
+const VLC_ENTRY vlc_table_b10[] =
 {
 	{ 0b1,           1,   0  },
 	{ 0b011,         3,  -1  },
@@ -189,6 +228,14 @@ const VLC_ENTRY vlc_table_b4[] =
 	{ 0b00000011100, 11,  14 },
 	{ 0b00000011010, 11,  15 },
 	{ 0b00000011000, 11,  16 },
+	{ 0, 0, 0 },
+};
+
+const VLC_ENTRY vlc_table_b11[] =
+{
+	{ 0b0,  1,  0 },
+	{ 0b11, 2, -1 },
+	{ 0b10, 2,  1 },
 	{ 0, 0, 0 },
 };
 
