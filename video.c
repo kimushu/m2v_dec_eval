@@ -16,10 +16,16 @@
 #include "dump.h"
 
 static const char* sequence_header();
-static const char* gop();
+static const char* sequence_extension();
+static const char* sequence_display_extension();
+static const char* sequence_scalable_extension();
+static const char* gop_header();
 static const char* picture();
 static const char* slice();
 static const char* macroblock();
+static const char* macroblock_modes();
+static const char* motion_vectors(int s);
+static const char* motion_vector(int r, int s);
 static const char* block(int bn);
 static const char* dequant(int bn);
 static const char* idct(int bn);
@@ -30,7 +36,25 @@ int max_slices, skip_slices;
 int pic_coding_type;
 int full_pel_fw_vector, full_pel_bw_vector;
 int fw_f_code, bw_f_code;
+int f_code[2][2];
+int intra_dc_precision;
+int picture_struct;
+int top_field_first;
+int frame_pred_frame_dct;
+int conceal_mv;
+int q_scale_type;
+int intra_vlc_fmt;
+int alt_scan;
+int rep_first_field;
+int chroma_420;
+int prog_frame;
+int v_axis;
+int field_seq;
+int sub_carrier;
+int burst_amp;
+int sub_car_phase;
 int quant_scale;
+int intra_slice;
 int mb_addr_inc, mb_type;
 int mb_quant, mb_mo_fw, mb_mo_bw, mb_pat, mb_intra;
 int mb_quant_scale;
@@ -66,22 +90,56 @@ static const int def_intra_qmat[8][8] = {
 	{ 27, 29, 35, 38, 46, 56, 69, 83 },
 };
 
+/*
+	picture start code   00
+	slice start code     01-af
+	user data start code b2
+	seq header code      b3
+	seq error code       b4
+	ext start code       b5
+	seq end code         b7
+	group start code     b8
+	system start codes   b9-ff
+*/
+
 const char* decode_video(const char* ref_dir, int slices, int skips)
 {
 	max_slices = slices;
 	skip_slices = skips;
 	nslice = 0;
 	CALL(dump_init(ref_dir));
-	while(bs_peek(32) == 0x000001b3)
+
+	// ISO-13818-2-DRAFT p.42
+	bs_nextcode(0x000001, 3);
+
+	uint32_t n;
+	do
 	{
 		CALL(sequence_header());
-		while(bs_peek(32) == 0x000001b8)
+		if(bs_peek(32) != 0x000001b5)
+			return "stream is mpeg1video! (not supported)";	// ISO11172-2
+		CALL(sequence_extension());
+		while(bs_peek(32) == 0x000001b5)
 		{
-			CALL(gop());
-			if(nslice == max_slices) return NULL;
+			bs_get(32);
+			if(bs_peek(4) == 0b0010)
+				CALL(sequence_display_extension());
+			else
+				CALL(sequence_scalable_extension());
 		}
+
+		do
+		{
+			if(bs_peek(32) == 0x000001b8)
+			{
+				CALL(gop_header());
+			}
+			CALL(picture());
+			n = bs_peek(32);
+		}
+		while(n == 0x00000100 || n == 0x000001b8);
 	}
-	if(bs_get(32) != 0x000001b7) return "illegal sequence end code";
+	while(n != 0x000001b7);
 	dump_finish();
 	return NULL;
 }
@@ -93,7 +151,7 @@ static const char* sequence_header()
 	video_wd = bs_get(12);
 	video_ht = bs_get(12);
 	printf("size: %d x %d\n", video_wd, video_ht);
-	printf("pel_aspect_ratio: %u\n", bs_gets(4));
+	printf("aspect_ratio: %u\n", bs_gets(4));
 	printf("picture_rate: %u\n", bs_gets(4));
 	printf("bitrate: %u\n", bs_get(18));
 	if(bs_gets(1) != 0b1) return "illegal marker-bit (seqh)";
@@ -121,54 +179,95 @@ static const char* sequence_header()
 		}
 	}
 	else for(int i = 0; i < 64; ++i) nonintra_qmat[0][i] = 16;
-	bs_align(8);
-	bs_nextcode(0x000001, 3);
-	if(bs_peek(32) == 0x000001b5)
-	{
-		bs_gets(32);
-		printf("extension_data: %u bytes\n", bs_nextcode(0x000001, 3));
-	}
-	if(bs_peek(32) == 0x000001b2)
-	{
-		bs_gets(32);
-		printf("user_data: %u bytes\n", bs_nextcode(0x000001, 3));
-	}
 	return NULL;
 }
 
-static const char* gop()
+static const char* sequence_extension()
 {
-	bs_get(32);
-	printf("---- GROUP OF PICTURES ----\n");
-	printf("time_code: %u\n", bs_get(25));
-	printf("type:");
-	if(bs_gets(1) == 0b1) printf(" closed");
-	if(bs_gets(1) == 0b1) printf(" broken_link");
-	printf("\n");
+	if(bs_get(32) != 0x000001b5) return "illegal ext_start_code";
+/*	int ext_id = bs_gets(4);
+	switch(ext_id)
+	{
+	case 0b0001:	// Sequence Extension
+	case 0b0010:	// Sequence Display Extension
+	case 0b0011:	// Quant Matrix Extension
+	case 0b0100:	// Copyright Extension
+	case 0b0101:	// Sequence Scalable Extension
+	case 0b0111:	// Picture Display Extension
+	case 0b1000:	// Picture Coding Extension
+	case 0b1001:	// Picture Spatial Scalable Extension
+	case 0b1010:	// Picture Temporal Scalable Extension
+	default:
+		return "illegal extension id";
+	}*/
+	printf("---- SEQUENCE EXTENSION ----\n");
+	if(bs_gets(4) != 0b0001) return "illegal extension id (!=0b0001)";
+	printf("profile: %u\n", bs_gets(8));
+	printf("prog_seq: %u\n", bs_gets(1));
+	printf("chroma_format: %u\n", bs_gets(2));
+	printf("horz_size_ext: %u\n", bs_gets(2));
+	printf("vert_size_ext: %u\n", bs_gets(2));
+	printf("bitrate_ext: %u\n", bs_get(12));
+	if(bs_gets(1) != 0b1) return "illegal marker-bit (s-ext)";
+	printf("vbv_buf_size_ext: %u\n", bs_gets(8));
+	printf("low_delay: %u\n", bs_gets(1));
+	printf("frame_rate_ext_n: %u\n", bs_gets(2));
+	printf("frame_rate_ext_d: %u\n", bs_gets(5));
+	bs_nextcode(0x000001, 3);
+	return NULL;
+}
+
+static const char* sequence_display_extension()
+{
+	if(bs_gets(4) != 0b0010) return "illegal extension id (!=0b0010)";
+	printf("---- SEQUENCE DISPLAY EXTENSION ----\n");
+	printf("video_fmt: %u\n", bs_gets(3));
+	int cd = bs_gets(1);
+	printf("color_desc: %u\n", cd);
+	if(cd)
+	{
+		printf("color_primaries: %u\n", bs_gets(8));
+		printf("trans_char: %u\n", bs_gets(8));
+		printf("mat_coef: %u\n", bs_gets(8));
+	}
+	printf("disp_horz_size: %u\n", bs_get(14));
+	if(bs_gets(1) != 0b1) return "illegal marker-bit (sde)";
+	printf("disp_vert_size: %u\n", bs_get(14));
 	bs_align(8);
 	bs_nextcode(0x000001, 3);
-	if(bs_peek(32) == 0x000001b5)
-	{
-		bs_gets(32);
-		printf("extension_data: %u bytes\n", bs_nextcode(0x000001, 3));
-	}
-	if(bs_peek(32) == 0x000001b2)
-	{
-		bs_gets(32);
-		printf("user_data: %u bytes\n", bs_nextcode(0x000001, 3));
-	}
-	while(bs_peek(32) == 0x00000100)
-	{
-		CALL(picture());
-		if(nslice == max_slices) return NULL;
-	}
+	return NULL;
+}
+
+static const char* sequence_scalable_extension()
+{
+	if(bs_gets(4) != 0b0101) return "illegal extension id (!=0b0101)";
+	printf("---- SEQUENCE SCALABLE EXTENSION ----\n");
+	printf("scalable_mode: %u\n", bs_gets(2));
+	printf("layer_id: %u\n", bs_gets(4));
+	printf("skipped...\n");	// TODO
+	bs_align(8);
+	bs_nextcode(0x000001, 3);
+	return NULL;
+}
+
+static const char* gop_header()
+{
+	if(bs_get(32) != 0x000001b8) return "illegal group_start_code";
+	printf("---- GROUP OF PICTURE HEADER ----\n");
+	printf("time_code: %u\n", bs_get(25));
+	printf("closed_gop: %u\n", bs_gets(1));
+	printf("broken_link: %u\n", bs_gets(1));
+	bs_align(8);
+	bs_nextcode(0x000001, 3);
 	return NULL;
 }
 
 static const char* picture()
 {
-	bs_get(32);
+	if(bs_get(32) != 0x00000100) return "illegal picture start code";
 	printf("---- PICTURE ----\n");
+
+	// picture header
 	printf("temp_ref: %u\n", bs_get(10));
 	pic_coding_type = bs_gets(3);
 	printf("pic_coding_type: %d (%c)\n", pic_coding_type, pct_string[pic_coding_type]);
@@ -193,16 +292,49 @@ static const char* picture()
 	if(ei) printf("\n");
 	bs_align(8);
 	bs_nextcode(0x000001, 3);
-	if(bs_peek(32) == 0x000001b5)
+
+	// picture_coding_ext
+	if(bs_get(32) != 0x000001b5) return "illegal picture coding ext start code";
+	if(bs_gets(4) != 0b1000) return "illegal ext id (!=0b1000)";
+	f_code[0][0] = bs_gets(4);
+	f_code[0][1] = bs_gets(4);
+	f_code[1][0] = bs_gets(4);
+	f_code[1][1] = bs_gets(4);
+	printf("f_code: {{%u, %u}, {%u, %u}}\n",
+		f_code[0][0], f_code[0][1], f_code[1][0], f_code[1][1]);
+	printf("intra_dc_precision: %u\n", intra_dc_precision = bs_gets(2));
+	printf("picture_struct: %u\n", picture_struct = bs_gets(2));
+	printf("top_field_first: %u\n", top_field_first = bs_gets(1));
+	printf("frame_pred_frame_dct: %u\n", frame_pred_frame_dct = bs_gets(1));
+	printf("conceal_mv: %u\n", conceal_mv = bs_gets(1));
+	printf("q_scale_type: %u\n", q_scale_type = bs_gets(1));
+	printf("intra_vlc_fmt: %u\n", intra_vlc_fmt = bs_gets(1));
+	printf("alt_scan: %u\n", alt_scan = bs_gets(1));
+	printf("rep_first_field: %u\n", rep_first_field = bs_gets(1));
+	printf("chroma_420_type: %u\n", chroma_420 = bs_gets(1));
+	printf("prog_frame: %u\n", prog_frame = bs_gets(1));
+	if(bs_gets(1) == 0b1)
 	{
-		bs_gets(32);
-		printf("extension_data: %u bytes\n", bs_nextcode(0x000001, 3));
+		printf("v_axis: %u\n", v_axis = bs_gets(1));
+		printf("field_seq: %u\n", field_seq = bs_gets(3));
+		printf("sub_carrier: %u\n", sub_carrier = bs_gets(1));
+		printf("burst_amp: %u\n", burst_amp = bs_gets(7));
+		printf("sub_car_phase: %u\n", sub_car_phase = bs_gets(8));
 	}
-	if(bs_peek(32) == 0x000001b2)
+	bs_align(8);
+	bs_nextcode(0x000001, 3);
+
+	// ext_user_data(2)
+	while(bs_peek(32) == 0x000001b5)
 	{
-		bs_gets(32);
-		printf("user_data: %u bytes\n", bs_nextcode(0x000001, 3));
+		// TODO
+		printf("---- PICTURE other EXTENSION DATA ----\n");
+		printf("skipped...\n");
+		bs_get(32);
+		bs_nextcode(0x000001, 3);
 	}
+
+	// CALL(picture_data());
 	uint32_t n;
 	// nslice = 0;
 	do
@@ -221,17 +353,25 @@ static const char* slice()
 	uint32_t v = bs_get(32);
 	if(nslice == skip_slices) dump_start();
 	printf("---- SLICE (0x%08x, S:%04d) ----\n", v, nslice);
+	if(video_ht > 2800) return "video too large!";
+	// TODO scalable
 	printf("quant_scale: %d\n", quant_scale = bs_gets(5));
 	dump(dump_slice, NULL, "# slice %6d", nslice);
 	dump(dump_slice, "quant_scale", " %2d", quant_scale);
-	int ei = 0;
-	while(bs_gets(1) == 0b1)
+	if(bs_gets(1) == 0b1)
 	{
-		if(!ei) printf("extra_info_slice:");
-		printf(" %02x", bs_gets(8));
-		ei = 1;
+		printf("intra_slice: %u\n", intra_slice = bs_gets(1));
+		bs_gets(7);
+		int ei = 0;
+		while(bs_gets(1) == 0b1)
+		{
+			if(!ei) printf("extra_info_slice:");
+			printf(" %02x", bs_gets(8));
+			ei = 1;
+		}
+		if(ei) printf("\n");
 	}
-	if(ei) printf("\n");
+	else intra_slice = 0;
 	nmb = 0;
 	dc_pred[0] = dc_pred[1] = dc_pred[2] = 128;
 	do
@@ -249,30 +389,11 @@ static const char* slice()
 static const char* macroblock()
 {
 	printf("---- MACROBLOCK (S:%05d, M:%04d) ----\n", nslice, nmb);
-	while(bs_peek(11) == 0b00000001111) bs_get(11);
 	while(bs_peek(11) == 0b00000001000) bs_get(11);
 	printf("mb_addr_inc: %d\n", mb_addr_inc = bs_vlc(vlc_table_b1));
 	dump(dump_mb, NULL, "# slice %6d, mb %4d", nslice, nmb);
 	dump(dump_mb, "mb_addr_inc", " %2d", mb_addr_inc);
-	switch(pic_coding_type)
-	{
-	case 0b001:		// I
-		mb_type = bs_vlc(vlc_table_b2a); break;
-	case 0b010:		// P
-		mb_type = bs_vlc(vlc_table_b2b); break;
-	case 0b011:		// B
-		mb_type = bs_vlc(vlc_table_b2c); break;
-	case 0b100:		// D
-		mb_type = bs_vlc(vlc_table_b2d); break;
-	}
-	mb_quant = (mb_type >> 4) & 1;
-	mb_mo_fw = (mb_type >> 3) & 1;
-	mb_mo_bw = (mb_type >> 2) & 1;
-	mb_pat   = (mb_type >> 1) & 1;
-	mb_intra = (mb_type >> 0) & 1;
-	if(!mb_intra) dc_pred[0] = dc_pred[1] = dc_pred[2] = 128;
-	printf("mb_type: quant=%d, mo_fw=%d, mo_bw=%d, pat=%d, intra=%d\n",
-		mb_quant, mb_mo_fw, mb_mo_bw, mb_pat, mb_intra);
+	CALL(macroblock_modes());
 	if(mb_quant) printf("mb_quant_scale: %d\n", mb_quant_scale = bs_gets(5));
 	else mb_quant_scale = 0;
 	dump(dump_mb, "type qua mofw mobw pat intra", " %d %d %d %d %d %d %2d",
@@ -324,6 +445,51 @@ static const char* macroblock()
 	return NULL;
 }
 
+static const char* macroblock_modes()
+{
+	// TODO: scalable
+	switch(pic_coding_type)
+	{
+	case 0b001:		// I
+		mb_type = bs_vlc(vlc_table_b2a); break;
+	case 0b010:		// P
+		mb_type = bs_vlc(vlc_table_b2b); break;
+	case 0b011:		// B
+		mb_type = bs_vlc(vlc_table_b2c); break;
+	case 0b100:		// D
+		mb_type = bs_vlc(vlc_table_b2d); break;
+	}
+	mb_quant = (mb_type >> 4) & 1;
+	mb_mo_fw = (mb_type >> 3) & 1;
+	mb_mo_bw = (mb_type >> 2) & 1;
+	mb_pat   = (mb_type >> 1) & 1;
+	mb_intra = (mb_type >> 0) & 1;
+	if(!mb_intra) dc_pred[0] = dc_pred[1] = dc_pred[2] = 128;
+	printf("mb_type: quant=%d, mo_fw=%d, mo_bw=%d, pat=%d, intra=%d\n",
+		mb_quant, mb_mo_fw, mb_mo_bw, mb_pat, mb_intra);
+	return NULL;
+}
+
+static const char* motion_vectors(int s)
+{
+	if(mv_count == 1)
+	{
+		if(mv_format == field && dmv != 1)
+			mv_field_select[0][s] = bs_gets(1);
+		CALL(motion_vector(0, s));
+	}
+	else
+	{
+		mv_field_select[0][s] = bs_gets(1);
+		CALL(motion_vector(0, s));
+		mv_field_select[1][s] = bs_gets(1);
+		CALL(motion_vector(1, s));
+	}
+}
+
+static const char* motion_vector(int r, int s)
+{
+}
 
 static const char* block(int bn)
 {
