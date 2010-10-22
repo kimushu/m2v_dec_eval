@@ -41,6 +41,7 @@ int horz_size, vert_size, aspect_ratio, frame_rate_code,
 	frame_rate_n, frame_rate_d,
 	bitrate_value, vbv_buf_size, const_param_flag;
 int intra_qmat[8][8], nonintra_qmat[8][8];
+int mb_width, mb_height;
 
 // extension data
 int seq_scalable;
@@ -64,6 +65,7 @@ int f_code[2][2], intra_dc_precision, picture_struct, top_field_first,
 // slice
 int nslice, max_slices, skip_slices;
 int q_scale_code, intra_slice;
+int mb_x, mb_y;
 
 // macroblock
 int nmb;
@@ -85,17 +87,25 @@ int QFS[64];
 static const char* const PCT_STRING = "0IPB4567";	// '4'=='D' if ISO11172-2
 static const char* const CHROMA_FMT_NAME[] = {"reserved", "4:2:0", "4:2:2", "4:4:4"};
 static const int BLK_COUNT[4] = {0, 6, 8, 12};
-static const int zigzag_scan[8][8] = {
-	{ 0, 1, 5, 6, 14, 15, 27, 28 },
-	{ 2, 4, 7, 13, 16, 26, 29, 42 },
-	{ 3, 8, 12, 17, 25, 30, 41, 43 },
-	{ 9, 11, 18, 24, 31, 40, 44, 53 },
+static const int ZIGZAG_SCAN[2][8][8] = {
+	{{ 0,  1,  5,  6, 14, 15, 27, 28 },
+	{  2,  4,  7, 13, 16, 26, 29, 42 },
+	{  3,  8, 12, 17, 25, 30, 41, 43 },
+	{  9, 11, 18, 24, 31, 40, 44, 53 },
 	{ 10, 19, 23, 32, 39, 45, 52, 54 },
 	{ 20, 22, 33, 38, 46, 51, 55, 60 },
 	{ 21, 34, 37, 47, 50, 56, 59, 61 },
-	{ 35, 36, 48, 49, 57, 58, 62, 63 },
+	{ 35, 36, 48, 49, 57, 58, 62, 63 }},
+	{{ 0,  4,  6, 20, 22, 36, 38, 52 },
+	{  1,  5,  7, 21, 23, 37, 39, 53 },
+	{  2,  8, 19, 24, 34, 40, 50, 54 },
+	{  3,  9, 18, 25, 35, 41, 51, 55 },
+	{ 10, 17, 26, 30, 42, 46, 56, 60 },
+	{ 11, 16, 27, 31, 43, 47, 57, 61 },
+	{ 12, 15, 28, 32, 44, 48, 58, 62 },
+	{ 13, 14, 29, 33, 45, 49, 59, 63 }},
 };
-static const int def_intra_qmat[8][8] = {
+static const int DEF_INTRA_QMAT[8][8] = {
 	{  8, 16, 19, 22, 26, 27, 29, 34 },
 	{ 16, 16, 22, 24, 27, 29, 34, 37 },
 	{ 19, 22, 26, 27, 29, 34, 34, 38 },
@@ -182,6 +192,9 @@ static const char* sequence_header()
 	horz_size = bs_get(12);
 	vert_size = bs_get(12);
 	printf("size: %d x %d\n", horz_size, vert_size);
+	mb_width = (horz_size + 15) / 16;
+	mb_height = (vert_size + 15) / 16;
+	printf("mb: %d x %d (%d MBs)\n", mb_width, mb_height, mb_width * mb_height);
 	printf("aspect_ratio: %u\n", aspect_ratio = bs_gets(4));
 	printf("frame_rate_code: %u\n", frame_rate_code = bs_gets(4));
 	frame_rate_d = 1;
@@ -210,7 +223,7 @@ static const char* sequence_header()
 			printf(" %3d%s", intra_qmat[0][i] = bs_gets(8),
 				(i & 7) == 7 ? "\n" : "");
 	}
-	else memcpy(intra_qmat, def_intra_qmat, sizeof(intra_qmat));
+	else memcpy(intra_qmat, DEF_INTRA_QMAT, sizeof(intra_qmat));
 	if(bs_gets(1) == 0b1)
 	{
 		printf("non_intra_quant_matrix:");
@@ -277,6 +290,8 @@ static const char* sequence_extension()
 	block_count = BLK_COUNT[chroma_fmt];
 	printf("horz_size w/ext: %u\n", horz_size += (bs_gets(2) << 12));
 	printf("vert_size w/ext: %u\n", vert_size += (bs_gets(2) << 12));
+	mb_width = (horz_size + 15) / 16;
+	mb_height = (vert_size + 15) / 16;
 	printf("bitrate w/ext: %u\n", bitrate_value += (bs_get(12) << 18));
 	if(bs_gets(1) != 0b1) return "illegal marker-bit (seq-ext)";
 	printf("vbv_buf_size w/ext: %u\n", vbv_buf_size += (bs_gets(8) << 10));
@@ -429,11 +444,13 @@ static const char* slice()
 	uint32_t n = bs_get(32);
 	if(nslice == skip_slices) dump_start();
 	printf("---- SLICE (0x%08x, S:%04d) ----\n", n, nslice);
+	if(n < 0x00000101 || n > 0x000001af) return "illegal slice start code";
 	if(vert_size > 2800)
 		return "video too large!"; // slice_vertical_position_extension
 	if(seq_scalable)
 		return "scalable is not supported!";
 	printf("q_scale_code: %u\n", q_scale_code = bs_gets(5));
+	if(q_scale_code == 0) return "illegal q_scale_code";
 	if(bs_gets(1) == 0b1)
 	{
 		printf("intra_slice: %u\n", intra_slice = bs_gets(1));
@@ -449,6 +466,32 @@ static const char* slice()
 	}
 	else intra_slice = 0;
 	nmb = 0;
+	mb_x = 0;
+
+	// ffmpeg の mpeg12.c L1683 によると、どうやらスライス先頭にも
+	// MB のスキップ数が記録されるらしい(initial skip)。
+	// このとき、テーブルは B1 を用いるが、インクリメント数-1 がスキップ数となる。
+	// そうでないと、0が表現できないので。なお、エスケープは33でよい。
+	int init_skips = 0;
+	while(1)
+	{
+		int skips = bs_vlc(vlc_table_b1);
+		if(skips < 0)
+			init_skips += 33;
+		else if(skips == 0)
+			return "illegal End of slice (mb_addr_inc = eos)";
+		else
+		{
+			init_skips = skips - 1;
+			break;
+		}
+	}
+
+	printf("init_skips: %d\n", init_skips);
+	mb_x += init_skips;
+	if(mb_x >= mb_width)
+		return "initial skip overflow";
+
 	reset_dc_dct_pred();
 	do
 	{
@@ -457,15 +500,43 @@ static const char* slice()
 	while(bs_peek(23) != 0);
 	bs_align(8);
 	bs_nextcode(0x000001, 3);
-	nslice++;
+	++nslice;
 	return NULL;
 }
 
 static const char* macroblock()
 {
+	mb_addr_inc = 0;
+	while(1)
+	{
+		int inc = bs_vlc(vlc_table_b1);
+		if(inc < 0)
+			mb_addr_inc += 33;
+		else if(inc == 0)
+		{
+			if(bs_peek(15) != 0) return "illegal end of slice (mb)";
+			return NULL;	// End of slice
+		}
+		else
+		{
+			mb_addr_inc += inc;
+			break;
+		}
+	}
+
+	// if(mb_addr_inc > 1 && pic_coding_type == 1)		// ffmpeg mpeg12.c L1817
+	// 	return "illegal MB skip in I frame!";
+
+	mb_x += mb_addr_inc;
+	while(mb_x >= mb_width)
+	{
+		mb_x -= mb_width;
+		++mb_y;
+	}
+
 	printf("---- MACROBLOCK (S:%05d, M:%04d) ----\n", nslice, nmb);
-	while(bs_peek(11) == 0b00000001000) bs_get(11);	// escape
-	printf("mb_addr_inc: %d\n", mb_addr_inc = bs_vlc(vlc_table_b1));
+	printf("mb_addr_inc: %d\n", mb_addr_inc);
+	printf("mb_addr: (%d, %d)\n", mb_x, mb_y);
 	if(mb_addr_inc > 1) reset_dc_dct_pred();
 	// dump(dump_mb, NULL, "# slice %6d, mb %4d", nslice, nmb);
 	// dump(dump_mb, "mb_addr_inc", " %2d", mb_addr_inc);
@@ -478,6 +549,7 @@ static const char* macroblock()
 		return "illegal marker-bit (mb)";
 	if(mb_pattern) CALL(coded_block_pattern());
 	for(int b = 0; b < block_count; ++b) CALL(block(b));
+	++nmb;
 	return NULL;
 }
 
@@ -596,6 +668,12 @@ static const char* block(int b)
 {
 	printf("---- BLOCK (S:%04d, M:%04d, B:%d) ----\n", nslice, nmb, b);
 	if(!pattern_code[b]) return NULL;
+
+	int i;
+	const VLC_ENTRY* table_dct =
+		(intra_vlc_fmt && mb_intra) ? vlc_table_b15 : vlc_table_b14;
+	for(i = 0; i < 64; ++i) QFS[i] = 0;	// まず0で埋めておく
+
 	if(mb_intra)
 	{
 		int dct_diff;
@@ -612,13 +690,62 @@ static const char* block(int b)
 		else dct_dc_diff = dct_diff = 0;
 
 		int cc = (b < 4) ? 0 : (b % 2 + 1);
+
+		// 先頭値(DC)
 		QFS[0] = dc_dct_pred[cc] + dct_diff;
+		if(QFS[0] < 0 || QFS[0] >= (1 << (8 + intra_dc_precision)))
+		{
+			printf("QFS[0]: %d\n", QFS[0]);
+			return "QFS[0] overflow!";
+		}
 		dc_dct_pred[cc] = QFS[0];
+		i = 1;
 	}
-	else
+	else i = 0;
+
+	// のこりの係数
+	while(1)
 	{
-		// First DCT coefficient
+		int c = bs_vlc(table_dct);
+		// NOTE2 - “End of Block” shall not be the only code of the block.
+		// の解釈がどうも分からない...
+		// 「EOB だけのブロックは存在し得ない(EOBが最初に来ることはない)」
+		// と思えばいいのか？
+		int run, level;
+		if(i > 0 && c == -1)
+			break;	// End of block
+		else if(i == 0 && c == -1)
+		{
+			run = 0; level = +1;
+		}
+		else if(i == 0 && c == -2)
+		{
+			run = 0; level = -1;
+		}
+		else if(c == -9)
+		{
+			// escape
+			run = bs_gets(6);
+			level = bs_get(12);
+			if(level >= 2048) level -= 4192;
+			if(level == -2048 || level == 0) return "level has forbidden value!";
+		}
+		else if(bs_gets(1))
+		{
+			// level is negative
+			run = c / 100; level = -(c % 100);
+		}
+		else
+		{
+			// level is positive
+			run = c / 100; level = c % 100;
+		}
+		if(i == 64) return "too much coefficients!";
+		i += run;	// zero run
+		if(i >= 64) return "invalid QFS index";
+		QFS[i++] = level;
 	}
+	printf("QFS last: %d\n", i);
 
 	return NULL;
 }
