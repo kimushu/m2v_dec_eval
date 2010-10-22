@@ -430,7 +430,7 @@ static const char* picture_data()
 		if(nslice == max_slices) return NULL;
 		n = bs_peek(32);
 	}
-	while(n == PICTURE_START_CODE);
+	while(0x00000101 <= n && n <= 0x000001af);
 	return NULL;
 }
 
@@ -472,23 +472,23 @@ static const char* slice()
 	// MB のスキップ数が記録されるらしい(initial skip)。
 	// このとき、テーブルは B1 を用いるが、インクリメント数-1 がスキップ数となる。
 	// そうでないと、0が表現できないので。なお、エスケープは33でよい。
-	int init_skips = 0;
-	while(1)
-	{
-		int skips = bs_vlc(vlc_table_b1);
-		if(skips < 0)
-			init_skips += 33;
-		else if(skips == 0)
-			return "illegal End of slice (mb_addr_inc = eos)";
-		else
-		{
-			init_skips = skips - 1;
-			break;
-		}
-	}
+	// int init_skips = 0;
+	// while(1)
+	// {
+	// 	int skips = bs_vlc(vlc_table_b1);
+	// 	if(skips < 0)
+	// 		init_skips += 33;
+	// 	else if(skips == 0)
+	// 		return "illegal End of slice (mb_addr_inc = eos)";
+	// 	else
+	// 	{
+	// 		init_skips = skips - 1;
+	// 		break;
+	// 	}
+	// }
 
-	printf("init_skips: %d\n", init_skips);
-	mb_x += init_skips;
+	// printf("init_skips: %d\n", init_skips);
+	// mb_x += init_skips;
 	if(mb_x >= mb_width)
 		return "initial skip overflow";
 
@@ -524,10 +524,10 @@ static const char* macroblock()
 		}
 	}
 
-	// if(mb_addr_inc > 1 && pic_coding_type == 1)		// ffmpeg mpeg12.c L1817
-	// 	return "illegal MB skip in I frame!";
+	if(mb_addr_inc > 1 && pic_coding_type == 1)		// ffmpeg mpeg12.c L1817
+		return "illegal MB skip in I frame!";
 
-	mb_x += mb_addr_inc;
+	if(nmb > 0) mb_x += mb_addr_inc;
 	while(mb_x >= mb_width)
 	{
 		mb_x -= mb_width;
@@ -535,7 +535,7 @@ static const char* macroblock()
 	}
 
 	printf("---- MACROBLOCK (S:%05d, M:%04d) ----\n", nslice, nmb);
-	printf("mb_addr_inc: %d\n", mb_addr_inc);
+	printf("mb_addr_inc: %d%s\n", mb_addr_inc, nmb > 0 ? "" : " (ignored)");
 	printf("mb_addr: (%d, %d)\n", mb_x, mb_y);
 	if(mb_addr_inc > 1) reset_dc_dct_pred();
 	// dump(dump_mb, NULL, "# slice %6d, mb %4d", nslice, nmb);
@@ -547,6 +547,7 @@ static const char* macroblock()
 	if(mb_mo_bw) CALL(motion_vectors(1));
 	if(mb_intra && conceal_mv && bs_gets(1) != 0b1)
 		return "illegal marker-bit (mb)";
+	for(int i = 0; i < 12; ++i) pattern_code[i] = mb_intra;
 	if(mb_pattern) CALL(coded_block_pattern());
 	for(int b = 0; b < block_count; ++b) CALL(block(b));
 	++nmb;
@@ -647,7 +648,6 @@ static const char* coded_block_pattern()
 	if(chroma_fmt == 3)	// 4:4:4
 		printf("cbp2: %d\n", cbp1 = bs_gets(6));
 
-	for(int i = 0; i < 12; ++i) pattern_code[i] = mb_intra;
 	if(mb_pattern)
 	{
 		for(int i = 0; i < 6; ++i) if(cbp420 & (1 << (5-i))) pattern_code[i] = 1;
