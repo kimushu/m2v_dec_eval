@@ -538,8 +538,9 @@ static const char* macroblock()
 	printf("mb_addr_inc: %d%s\n", mb_addr_inc, nmb > 0 ? "" : " (ignored)");
 	printf("mb_addr: (%d, %d)\n", mb_x, mb_y);
 	if(mb_addr_inc > 1) reset_dc_dct_pred();
-	// dump(dump_mb, NULL, "# slice %6d, mb %4d", nslice, nmb);
-	// dump(dump_mb, "mb_addr_inc", " %2d", mb_addr_inc);
+	dump(dump_mb, NULL, "# slice %6d, mb %4d", nslice, nmb);
+	dump(dump_mb, "mb_x mb_y mb_addr_inc", " %3d %3d %2d", mb_x, mb_y, mb_addr_inc);
+	dump(dump_mb, "bytepos bitpos", "0x%x %d", g_total_bits / 8, g_total_bits % 8);
 	CALL(macroblock_modes());
 	if(mb_quant) printf("mb_q_scale_code: %d\n", mb_q_scale_code = bs_gets(5));
 	else mb_q_scale_code = 0;
@@ -722,6 +723,10 @@ static const char* block(int b)
 		{
 			run = 0; level = -1;
 		}
+		else if(c == -2)
+		{
+			run = 0; level = bs_gets(1) ? -1 : 1;
+		}
 		else if(c == -9)
 		{
 			// escape
@@ -746,6 +751,11 @@ static const char* block(int b)
 		QFS[i++] = level;
 	}
 	printf("QFS last: %d\n", i);
+	dump(dump_qfs, NULL, "# slice %6d, mb %4d, block %2d", nslice, nmb, b);
+	for(int j = 0; j <= (64 - 8); j += 8)
+		dump(dump_qfs, NULL, " %5d %5d %5d %5d %5d %5d %5d %5d",
+			QFS[j+0], QFS[j+1], QFS[j+2], QFS[j+3],
+			QFS[j+4], QFS[j+5], QFS[j+6], QFS[j+7]);
 
 	return NULL;
 }
