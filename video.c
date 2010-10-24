@@ -64,8 +64,9 @@ int f_code[2][2], intra_dc_precision, picture_struct, top_field_first,
 
 // slice
 int nslice, max_slices, skip_slices;
+int slice_vert_position;
 int q_scale_code, intra_slice;
-int mb_x, mb_y;
+int mb_x, mb_y, prev_mb_addr;
 
 // macroblock
 int nmb;
@@ -301,7 +302,8 @@ static const char* sequence_extension()
 	printf("frame_rate w/ext: %lf (%u/%u)\n", (double)frame_rate_n / frame_rate_d,
 		frame_rate_n, frame_rate_d);
 	bs_align(8);
-	bs_nextcode(0x000001, 3);
+	n = bs_nextcode(0x000001, 3);
+	if(n > 0) printf("*** skipped (seqext) %d ***\n", n);
 	return NULL;
 }
 
@@ -346,10 +348,17 @@ static const char* group_of_pictures_header()
 	printf("---- GROUP OF PICTURE HEADER (0x%08x) ----\n", n);
 	if(n != GROUP_START_CODE) return "illegal GROUP_START_CODE";
 	printf("time_code: %u\n", time_code = bs_get(25));
+	printf("drop_frame_flag: %u\n", (time_code >> 24) & 1);
+	printf("time_code_hours: %u\n", (time_code >> 19) & 31);
+	printf("time_code_minutes: %u\n", (time_code >> 13) & 63);
+	printf("time_code_marker_bit: %u\n", (time_code >> 12) & 1);
+	printf("time_code_seconds: %u\n", (time_code >> 6) & 63);
+	printf("time_code_pictures: %u\n", (time_code >> 0) & 63);
 	printf("closed_gop: %u\n", closed_gop = bs_gets(1));
 	printf("broken_link: %u\n", broken_link = bs_gets(1));
 	bs_align(8);
-	bs_nextcode(0x000001, 3);
+	n = bs_nextcode(0x000001, 3);
+	if(n > 0) printf("**** skipped **** (gop) %d\n", n);
 	return NULL;
 }
 
@@ -381,7 +390,8 @@ static const char* picture_header()
 	}
 	if(ei) printf("\n");
 	bs_align(8);
-	bs_nextcode(0x000001, 3);
+	n = bs_nextcode(0x000001, 3);
+	if(n > 0) printf("**** skipped **** (picheader) %d\n", n);
 	return NULL;
 }
 
@@ -417,7 +427,8 @@ static const char* picture_coding_extension()
 		printf("sub_car_phase: %u\n", sub_car_phase = bs_gets(8));
 	}
 	bs_align(8);
-	bs_nextcode(0x000001, 3);
+	n = bs_nextcode(0x000001, 3);
+	if(n > 0) printf("**** skipped **** (pce) %d\n", n);
 	return NULL;
 }
 
@@ -445,6 +456,8 @@ static const char* slice()
 	if(nslice == skip_slices) dump_start();
 	printf("---- SLICE (0x%08x, S:%04d) ----\n", n, nslice);
 	if(n < 0x00000101 || n > 0x000001af) return "illegal slice start code";
+	slice_vert_position = (n & 0xff) - 1;
+	printf("slice_vert_position: %u\n", slice_vert_position);
 	if(vert_size > 2800)
 		return "video too large!"; // slice_vertical_position_extension
 	if(seq_scalable)
@@ -466,7 +479,9 @@ static const char* slice()
 	}
 	else intra_slice = 0;
 	nmb = 0;
-	mb_x = 0;
+	prev_mb_addr = mb_width * mb_height - 1;
+	// mb_x = 0;
+	// mb_y = slice_vert_position;
 
 	// ffmpeg の mpeg12.c L1683 によると、どうやらスライス先頭にも
 	// MB のスキップ数が記録されるらしい(initial skip)。
@@ -489,8 +504,8 @@ static const char* slice()
 
 	// printf("init_skips: %d\n", init_skips);
 	// mb_x += init_skips;
-	if(mb_x >= mb_width)
-		return "initial skip overflow";
+	// if(mb_x >= mb_width)
+	// 	return "initial skip overflow";
 
 	reset_dc_dct_pred();
 	do
@@ -499,7 +514,8 @@ static const char* slice()
 	}
 	while(bs_peek(23) != 0);
 	bs_align(8);
-	bs_nextcode(0x000001, 3);
+	n = bs_nextcode(0x000001, 3);
+	if(n > 0) printf("*** skipped *** %u\n", n);
 	++nslice;
 	return NULL;
 }
@@ -527,15 +543,12 @@ static const char* macroblock()
 	if(mb_addr_inc > 1 && pic_coding_type == 1)		// ffmpeg mpeg12.c L1817
 		return "illegal MB skip in I frame!";
 
-	if(nmb > 0) mb_x += mb_addr_inc;
-	while(mb_x >= mb_width)
-	{
-		mb_x -= mb_width;
-		++mb_y;
-	}
+	prev_mb_addr = (prev_mb_addr + mb_addr_inc) % (mb_width * mb_height);
+	mb_x = prev_mb_addr % mb_width;
+	mb_y = prev_mb_addr / mb_width + slice_vert_position;
 
 	printf("---- MACROBLOCK (S:%05d, M:%04d) ----\n", nslice, nmb);
-	printf("mb_addr_inc: %d%s\n", mb_addr_inc, nmb > 0 ? "" : " (ignored)");
+	printf("mb_addr_inc: %d\n", mb_addr_inc);
 	printf("mb_addr: (%d, %d)\n", mb_x, mb_y);
 	if(mb_addr_inc > 1) reset_dc_dct_pred();
 	dump(dump_mb, NULL, "# slice %6d, mb %4d", nslice, nmb);
@@ -597,8 +610,17 @@ static const char* macroblock_modes()
 			default: return "illegal frame_mo_type";
 			}
 			printf("frame_mo_type: %d\n", frame_mo_type);
+			printf("mv_count: %d\n", mv_count);
+			printf("mv_format: '%c'\n", mv_format);
+			printf("dmv: %d\n", dmv);
 			if(frame_mo_type != 2)
 				return "non-frame-based prediction is not supported";
+		}
+		else
+		{
+			mv_count = 1;
+			mv_format = 'r';
+			dmv = 0;
 		}
 	}
 	if(picture_struct == PIC_STRUCT_FRAME && frame_pred_frame_dct == 0
@@ -694,10 +716,10 @@ static const char* block(int b)
 
 		// 先頭値(DC)
 		QFS[0] = dc_dct_pred[cc] + dct_diff;
+		printf("QFS[0]: %d, (%d + %d)\n", QFS[0], dc_dct_pred[cc], dct_diff);
 		if(QFS[0] < 0 || QFS[0] >= (1 << (8 + intra_dc_precision)))
 		{
-			printf("QFS[0]: %d\n", QFS[0]);
-			return "QFS[0] overflow!";
+			// return "QFS[0] overflow!";
 		}
 		dc_dct_pred[cc] = QFS[0];
 		i = 1;
