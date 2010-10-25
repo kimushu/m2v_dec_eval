@@ -28,6 +28,7 @@ const char* decode_pack()
 		}
 	}
 	while(bs_peek(32) == 0x000001ba);
+	printf("---- END OF STREAM ----\n");
 	return NULL;
 }
 
@@ -115,16 +116,65 @@ static const char* pes_packet()
 	case 0x000001f2:	// DSMCC
 	case 0x000001f8:	// ITU-T E
 		// non-data
+		return "non-supported packet type";
 		for(int i = 0; i < len; ++i) bs_gets(8);
 		return NULL;
 	case 0x000001be:	// padding
 		for(int i = 0; i < len; ++i)
 		{
 			uint8_t v = bs_gets(8);
-			if(v == 0x0f) return NULL;	// TODO:暫定的な終了判定
+			if(v == 0x0f)
+			{
+				printf("---- END OF STREAM (ff) ----\n");
+				return NULL;	// TODO:暫定的な終了判定
+			}
 			if(v != 0xff) return "illegal padding byte";
 		}
 		return NULL;
+	}
+
+	// skip stuffing bytes
+	while(bs_peek(1))
+	{
+		bs_get(8);
+		len -= 1;
+	}
+
+	if(bs_peek(2) == 0b01)
+	{
+		bs_gets(2);
+		printf("std_buf_scale: %u\n", bs_gets(1));
+		printf("std_buf_size: %u\n", bs_get(13));
+		len -= 2;
+	}
+
+	uint32_t n = bs_peek(4);
+	if(n == 0b0010 || n == 0b0011)
+	{
+		bs_gets(4);
+		printf("pres_time_stamp[2]: %u\n", bs_gets(3));
+		if(bs_gets(1) == 0b0) return "illegal marker-bit (pes pts 1)";
+		printf("pres_time_stamp[1]: %u\n", bs_get(15));
+		if(bs_gets(1) == 0b0) return "illegal marker-bit (pes pts 2)";
+		printf("pres_time_stamp[0]: %u\n", bs_get(15));
+		if(bs_gets(1) == 0b0) return "illegal marker-bit (pes pts 3)";
+		len -= 5;
+	}
+	if(n == 0b0011)
+	{
+		if(bs_gets(4) != 0b0001) return "illegal id bits (pes)";
+		printf("dec_time_stamp[2]: %u\n", bs_gets(3));
+		if(bs_gets(1) == 0b0) return "illegal marker-bit (pes dts 1)";
+		printf("dec_time_stamp[1]: %u\n", bs_get(15));
+		if(bs_gets(1) == 0b0) return "illegal marker-bit (pes dts 2)";
+		printf("dec_time_stamp[0]: %u\n", bs_get(15));
+		if(bs_gets(1) == 0b0) return "illegal marker-bit (pes dts 3)";
+		len -= 5;
+	}
+	else if(n != 0b0010)
+	{
+		if(bs_gets(8) != 0b00001111) return "illegal id byte";
+		len -= 1;
 	}
 
 	if(0x000001c0 <= id && id <= 0x000001df)

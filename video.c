@@ -713,7 +713,7 @@ static const char* block(int b)
 		printf("QFS[0]: %d, (%d + %d)\n", QFS[0], dc_dct_pred[cc], dct_diff);
 		if(QFS[0] < 0 || QFS[0] >= (1 << (8 + intra_dc_precision)))
 		{
-			// return "QFS[0] overflow!";
+			return "QFS[0] overflow!";
 		}
 		dc_dct_pred[cc] = QFS[i++];
 	}
@@ -762,12 +762,12 @@ static const char* block(int b)
 		i += run;	// zero run
 		if(i >= 64)
 		{
-			static int lasterror = 0;
-			int k = g_total_bits / 8;
-			printf("run:%d\n 'invalid QFS index' at %d (+%d)\n", run, k, k - lasterror);
-			lasterror = k;
-			i = 63;
-			// return "invalid QFS index";
+			// static int lasterror = 0;
+			// int k = g_total_bits / 8;
+			// printf("run:%d\n 'invalid QFS index' at %d (+%d)\n", run, k, k - lasterror);
+			// lasterror = k;
+			// i = 63;
+			return "invalid QFS index";
 		}
 		QFS[i++] = level;
 		// printf("QFS[%2d]: %d    (%d skipped)\n", i - 1, level, run);
