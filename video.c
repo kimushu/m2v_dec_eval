@@ -159,6 +159,7 @@ static const int QUANT_SCALE[2][32] = {
 
 #define CLIP_S2048(x)		({ if((x) < -2048) (x) = -2048; else if((x) > 2047) (x) = 2047; })
 #define CLIP_US255(x)		({ if((x) < 0) (x) = 0; else if((x) > 255) (x) = 255; })
+#define CLIP_S256(x)		({ if((x) < -256) (x) = -256; else if((x) > 255) (x) = 255; })
 
 const char* decode_video(const char* ref_dir, int slices, int skips)
 {
@@ -616,6 +617,7 @@ static const char* macroblock()
 	CALL(macroblock_modes());
 	if(mb_quant) printf("mb_q_scale_code: %d\n", mb_q_scale_code = bs_gets(5));
 	else mb_q_scale_code = q_scale_code;
+	q_scale_code = mb_q_scale_code;	// 一度でも他の値が出たら上書きされる扱い
 	if(mb_mo_fw || (mb_intra && conceal_mv)) CALL(motion_vectors(0));
 	if(mb_mo_bw) CALL(motion_vectors(1));
 	if(mb_intra && conceal_mv && bs_gets(1) != 0b1)
@@ -991,7 +993,9 @@ const char* idct(int b)
 			if(v == 0) d *= M_SQRT1_2;
 			s += d;
 		}
-		f[y+oy][x+ox] = (int)(s / 4);
+		int i = (int)(s / 4);
+		CLIP_S256(i);
+		f[y+oy][x+ox] = i;
 	}
 	//-*/
 	// extern void simple_idct(int L[8][8], int S[8][8]);
