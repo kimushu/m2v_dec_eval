@@ -141,6 +141,7 @@ static const char* pes_packet()
 	if(0x000001e0 <= id && id <= 0x000001ef)
 	{
 		// video data
+		printf("VIDEO PACKET (0x%08x): %d bytes\n", id, len);
 		for(int i = 0; i < len; ++i)
 		{
 			uint8_t v = bs_gets(8);

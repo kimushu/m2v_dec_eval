@@ -496,11 +496,14 @@ static const char* slice()
 	// 	return "initial skip overflow";
 
 	reset_dc_dct_pred();
+	const char* r = NULL;
 	do
 	{
-		CALL(macroblock());
+		r = macroblock();
+		if(r) break;
 	}
 	while(bs_peek(23) != 0);
+	if(r) printf("*** slice is skipeed because of error: %s ***\n", r);
 	bs_align(8);
 	n = bs_nextcode(0x000001, 3);
 	if(n > 0) printf("*** skipped *** %u\n", n);
@@ -627,9 +630,11 @@ static const char* motion_vectors(int s)
 	}
 	else
 	{
-		mo_vert_field_select[0][s] = bs_gets(1);
+		printf("mo_vert_field_select[0][%d]: %d\n", s,
+			mo_vert_field_select[0][s] = bs_gets(1));
 		CALL(motion_vector(0, s));
-		mo_vert_field_select[1][s] = bs_gets(1);
+		printf("mo_vert_field_select[1][%d]: %d\n", s,
+			mo_vert_field_select[1][s] = bs_gets(1));
 		CALL(motion_vector(1, s));
 	}
 	return NULL;
@@ -684,6 +689,7 @@ static const char* block(int b)
 	const VLC_ENTRY* table_dct =
 		(intra_vlc_fmt && mb_intra) ? vlc_table_b15 : vlc_table_b14;
 	for(i = 0; i < 64; ++i) QFS[i] = 0;	// まず0で埋めておく
+	i = 0;
 
 	if(mb_intra)
 	{
@@ -709,8 +715,7 @@ static const char* block(int b)
 		{
 			// return "QFS[0] overflow!";
 		}
-		dc_dct_pred[cc] = QFS[0];
-		i = 1;
+		dc_dct_pred[cc] = QFS[i++];
 	}
 	else if(bs_peek(1) == 0b1)
 	{
@@ -741,25 +746,31 @@ static const char* block(int b)
 			level = bs_get(12);
 			if(level >= 2048) level -= 4192;
 			if(level == -2048 || level == 0) return "level has forbidden value!";
+			printf("### escape used\n");
 		}
 		else if(bs_gets(1))
 		{
 			// level is negative
-			run = c / 100; level = -(c % 100);
+			run = c >> 8; level = -(c % 100);
 		}
 		else
 		{
 			// level is positive
-			run = c / 100; level = c % 100;
+			run = c >> 8; level = c % 100;
 		}
 		if(i == 64) return "too much coefficients!";
 		i += run;	// zero run
 		if(i >= 64)
 		{
-			printf("run:%d\n", run);
-			return "invalid QFS index";
+			static int lasterror = 0;
+			int k = g_total_bits / 8;
+			printf("run:%d\n 'invalid QFS index' at %d (+%d)\n", run, k, k - lasterror);
+			lasterror = k;
+			i = 63;
+			// return "invalid QFS index";
 		}
 		QFS[i++] = level;
+		// printf("QFS[%2d]: %d    (%d skipped)\n", i - 1, level, run);
 	}
 	printf("QFS last: %d\n", i);
 	dump(dump_qfs, NULL, "# slice %6d, mb %4d, block %2d", nslice, nmb, b);
