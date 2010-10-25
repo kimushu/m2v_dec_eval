@@ -162,9 +162,11 @@ const char* decode_video(const char* ref_dir, int slices, int skips)
 			CALL(picture_coding_extension());
 			CALL(extension_and_user_data(2));
 			CALL(picture_data());
+			if(nslice == max_slices) break;
 			n = bs_peek(32);
 		}
 		while(n == PICTURE_START_CODE || n == GROUP_START_CODE);
+		if(nslice == max_slices) break;
 	}
 	while(n != SEQ_END_CODE);
 	bs_get(32);
@@ -774,10 +776,12 @@ static const char* block(int b)
 	}
 	printf("QFS last: %d\n", i);
 	dump(dump_qfs, NULL, "# slice %6d, mb %4d, block %2d", nslice, nmb, b);
-	for(int j = 0; j <= (64 - 8); j += 8)
-		dump(dump_qfs, NULL, " %5d %5d %5d %5d %5d %5d %5d %5d",
+	for(int j = 0; j <= (64 - 16); j += 16)
+		dump(dump_qfs, NULL, " %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d",
 			QFS[j+0], QFS[j+1], QFS[j+2], QFS[j+3],
-			QFS[j+4], QFS[j+5], QFS[j+6], QFS[j+7]);
+			QFS[j+4], QFS[j+5], QFS[j+6], QFS[j+7],
+			QFS[j+8], QFS[j+9], QFS[j+10], QFS[j+11],
+			QFS[j+12], QFS[j+13], QFS[j+14], QFS[j+15]);
 
 	return NULL;
 }

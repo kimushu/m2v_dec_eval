@@ -5,6 +5,8 @@
 
 TARGET = m2vdec
 
+TEST = gs_m2v.mpg.vs
+
 SOURCES = main.c ps.c bitstream.c video.c vlc.c dump.c simple_idct.c
 
 CC = gcc
@@ -30,4 +32,7 @@ simple_idct.c: simple_idct.rb
 
 clean:
 	@rm -f $(OBJS) $(TARGET) dump.{c,h} simple_idct.c
+
+test: $(TEST) $(TARGET)
+	./$(TARGET) -v $< -s 120 -r > $<.log
 
