@@ -1,6 +1,6 @@
 //================================================================================
 // m2v_dec_eval - MPEG2 ビデオ デコーダ
-// ref: ISO13818-2?
+// ref: ISO13818-2
 // $Id$
 //================================================================================
 
@@ -116,18 +116,6 @@ static const int DEF_INTRA_QMAT[8][8] = {
 	{ 26, 27, 29, 34, 38, 46, 56, 69 },
 	{ 27, 29, 35, 38, 46, 56, 69, 83 },
 };
-
-/*
-	picture start code   00
-	slice start code     01-af
-	user data start code b2
-	seq header code      b3
-	seq error code       b4
-	ext start code       b5
-	seq end code         b7
-	group start code     b8
-	system start codes   b9-ff
-*/
 
 #define PICTURE_START_CODE	0x00000100
 #define UDATA_START_CODE	0x000001b2
@@ -724,7 +712,16 @@ static const char* block(int b)
 		dc_dct_pred[cc] = QFS[0];
 		i = 1;
 	}
-	else i = 0;
+	else if(bs_peek(1) == 0b1)
+	{
+		// non-intra の最初の係数で、先頭が 1 の場合(特例)
+		// 11 -> (0,-1)
+		// 10 -> (0,+1)
+		if(bs_gets(2) & 1)
+			QFS[i++] = -1;
+		else
+			QFS[i++] = 1;
+	}
 
 	// のこりの係数
 	while(1)
@@ -735,20 +732,8 @@ static const char* block(int b)
 		// 「EOB だけのブロックは存在し得ない(EOBが最初に来ることはない)」
 		// と思えばいいのか？
 		int run, level;
-		if(i > 0 && c == -1)
+		if(c == -1)
 			break;	// End of block
-		else if(i == 0 && c == -1)
-		{
-			run = 0; level = +1;
-		}
-		else if(i == 0 && c == -2)
-		{
-			run = 0; level = -1;
-		}
-		else if(c == -2)
-		{
-			run = 0; level = bs_gets(1) ? -1 : 1;
-		}
 		else if(c == -9)
 		{
 			// escape
@@ -769,7 +754,11 @@ static const char* block(int b)
 		}
 		if(i == 64) return "too much coefficients!";
 		i += run;	// zero run
-		if(i >= 64) return "invalid QFS index";
+		if(i >= 64)
+		{
+			printf("run:%d\n", run);
+			return "invalid QFS index";
+		}
 		QFS[i++] = level;
 	}
 	printf("QFS last: %d\n", i);
