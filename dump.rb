@@ -24,7 +24,7 @@ open("dump.c", "w") {|c|
 
 int dump_enable;
 EOD
-	DUMPS.each {|d|
+	(DUMPS+["yuv"]).each {|d|
 		c.puts("FILE* dump_#{d};")
 	}
 	c.print(<<EOD)
@@ -48,6 +48,9 @@ EOD
 	}
 
 	c.print(<<EOD)
+	strcpy(fn, "raw.yuv");
+	if(!(dump_yuv = fopen(path, "wb")))
+		return "cannot open ref_*/raw.yuv";
 
 	return NULL;
 }
@@ -60,7 +63,7 @@ void dump_start()
 void dump_finish()
 {
 EOD
-	DUMPS.each {|d|
+	(DUMPS+["yuv"]).each {|d|
 		c.print(<<EOD)
 	if(dump_#{d}) { fclose(dump_#{d}); dump_#{d} = NULL; }
 EOD
@@ -107,7 +110,7 @@ extern void dump(FILE* fp, const char* desc, const char* fmt, ...);
 
 // exported file pointers
 EOD
-	DUMPS.each {|d|
+	(DUMPS+["yuv"]).each {|d|
 		h.puts("extern FILE* dump_#{d};")
 	}
 	h.print(<<EOD)

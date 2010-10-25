@@ -8,6 +8,7 @@
 #define _USE_MATH_DEFINES
 #include <stdio.h>
 #include <string.h>
+#include <malloc.h>
 #include <math.h>
 #include "m2vdec.h"
 #include "bitstream.h"
@@ -36,6 +37,7 @@ static const char* block(int b);
 static const char* block_coefs(int b);
 static const char* dequant(int b);
 static const char* idct(int b);
+static const char* mc();
 
 // sequence_header
 int horz_size, vert_size, aspect_ratio, frame_rate_code,
@@ -43,6 +45,7 @@ int horz_size, vert_size, aspect_ratio, frame_rate_code,
 	bitrate_value, vbv_buf_size, const_param_flag;
 int intra_qmat[8][8], nonintra_qmat[8][8];
 int mb_width, mb_height;
+int vert_bufsize;
 
 // extension data
 int seq_scalable;
@@ -54,7 +57,7 @@ int prof_and_level, prog_seq, chroma_fmt, low_delay, block_count;
 int time_code, closed_gop, broken_link;
 
 // picture header
-int temp_ref, pic_coding_type, vbv_delay,
+int npict, temp_ref, pic_coding_type, vbv_delay,
 	full_pel_fw_vector, fw_f_code, full_pel_bw_vector, bw_f_code;
 
 // picture coding extension
@@ -77,20 +80,34 @@ int field_mo_type, frame_mo_type, dct_type, mv_count, mv_format, dmv;
 
 // motion vectors
 int mo_vert_field_select[2][2], mo_code[2][2][2], mo_residual[2][2][2],
-	dmvector[2];
+	dmvector[2], PMV[2][2][2], vector[2][2][2];
 
 // coded block pattern
 int cbp420, cbp1, cbp2, pattern_code[12];
 
 // block
 int dct_dc_diff, dc_dct_pred[3];
-int QFS[64], QF[8][8], F[8][8], f[8][8];
+int QFS[64], QF[8][8], F[8][8];
+
+// yuv out buffer
+uint8_t *yuv_y, *yuv_cb, *yuv_cr;
+
+// macroblock data
+//
+// B0 B1
+// B2 B3
+// C0 C1 (4:2:0)
+// C2 C3 (4:2:2)
+// C4 C5
+// C6 C7 (4:4:4)
+int f[48][16], p[48][16], d[48][16];
 
 // idct (slow, but easy to understand)
 static double IDCT_SLOW_COS[32][32];
 
 static const char* const PCT_STRING = "0IPB4567";	// '4'=='D' if ISO11172-2
 static const char* const CHROMA_FMT_NAME[] = {"reserved", "4:2:0", "4:2:2", "4:4:4"};
+static const int CHROMA_FMT_MBH[] = {0, 24, 32, 48};
 static const int BLK_COUNT[4] = {0, 6, 8, 12};
 static const int ZIGZAG_SCAN[2][8][8] = {
 	{{ 0,  1,  5,  6, 14, 15, 27, 28 },
@@ -140,7 +157,8 @@ static const int QUANT_SCALE[2][32] = {
 #define PIC_STRUCT_BTMF		2
 #define PIC_STRUCT_FRAME	3
 
-#define CLIP_2048(x)		({ if((x) < -2048) (x) = -2048; else if((x) > 2047) (x) = 2047; })
+#define CLIP_S2048(x)		({ if((x) < -2048) (x) = -2048; else if((x) > 2047) (x) = 2047; })
+#define CLIP_US255(x)		({ if((x) < 0) (x) = 0; else if((x) > 255) (x) = 255; })
 
 const char* decode_video(const char* ref_dir, int slices, int skips)
 {
@@ -189,6 +207,10 @@ const char* decode_video(const char* ref_dir, int slices, int skips)
 	while(n != SEQ_END_CODE);
 	bs_get(32);
 	dump_finish();
+	if(yuv_y) free(yuv_y);
+	if(yuv_cb) free(yuv_cb);
+	if(yuv_cr) free(yuv_cr);
+	yuv_y = yuv_cb = yuv_cr = NULL;
 	return NULL;
 }
 
@@ -203,6 +225,15 @@ static const char* sequence_header()
 	printf("size: %d x %d\n", horz_size, vert_size);
 	mb_width = (horz_size + 15) / 16;
 	mb_height = (vert_size + 15) / 16;
+	vert_bufsize = mb_height * 16;
+
+	if(yuv_y) free(yuv_y);
+	yuv_y = (uint8_t*)malloc(horz_size * vert_bufsize);
+	if(yuv_cb) free(yuv_cb);
+	yuv_cb = (uint8_t*)malloc(horz_size * vert_bufsize / 4);
+	if(yuv_cr) free(yuv_cr);
+	yuv_cr = (uint8_t*)malloc(horz_size * vert_bufsize / 4);
+
 	printf("mb: %d x %d (%d MBs)\n", mb_width, mb_height, mb_width * mb_height);
 	printf("aspect_ratio: %u\n", aspect_ratio = bs_gets(4));
 	printf("frame_rate_code: %u\n", frame_rate_code = bs_gets(4));
@@ -410,6 +441,7 @@ static const char* picture_header()
 	bs_align(8);
 	n = bs_nextcode(0x000001, 3);
 	if(n > 0) printf("**** skipped **** (picheader) %d\n", n);
+	++npict;
 	return NULL;
 }
 
@@ -453,6 +485,9 @@ static const char* picture_coding_extension()
 static const char* picture_data()
 {
 	uint32_t n;
+	memset(yuv_y, 0, horz_size * vert_size);
+	memset(yuv_cb, 0, horz_size * vert_size / 4);
+	memset(yuv_cr, 0, horz_size * vert_size / 4);
 	do
 	{
 		CALL(slice());
@@ -460,6 +495,9 @@ static const char* picture_data()
 		n = bs_peek(32);
 	}
 	while(0x00000101 <= n && n <= 0x000001af);
+	fwrite(yuv_y, 1, horz_size * vert_size, dump_yuv);
+	fwrite(yuv_cb, 1, horz_size * vert_size / 4, dump_yuv);
+	fwrite(yuv_cr, 1, horz_size * vert_size / 4, dump_yuv);
 	return NULL;
 }
 
@@ -584,7 +622,28 @@ static const char* macroblock()
 		return "illegal marker-bit (mb)";
 	for(int i = 0; i < 12; ++i) pattern_code[i] = mb_intra;
 	if(mb_pattern) CALL(coded_block_pattern());
-	for(int b = 0; b < block_count; ++b) CALL(block(b));
+	for(int b = 0; b < block_count; ++b)
+	{
+		// block decode
+		CALL(block(b));
+
+		// motion compensation
+		CALL(mc());
+
+		// output to yuv buffer
+		for(int y = 0; y < 16; ++y) for(int x = 0; x < 16; ++x)
+		{
+			yuv_y[(mb_y * 16 + y) * horz_size + mb_x * 16 + x] = d[y][x];
+		}
+		for(int y = 0; y < 8; ++y)
+		{
+			for(int x = 0; x < 8; ++x)
+			{
+				yuv_cr[(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = d[y + 16][x];
+				yuv_cb[(mb_y * 8 + y) * horz_size / 2 + mb_y * 8 + x] = d[y + 16][x + 8];
+			}
+		}
+	}
 	++nmb;
 	return NULL;
 }
@@ -888,7 +947,7 @@ const char* dequant(int b)
 		for(int u = (v == 7) ? 6 : 7; u > 0; --u)
 		{
 			int x = F[v][u];
-			CLIP_2048(x);
+			CLIP_S2048(x);
 			F[v][u] = x;
 			sum += x;
 		}
@@ -896,7 +955,7 @@ const char* dequant(int b)
 		if(v == 7)
 		{
 			int x = F[7][7];
-			CLIP_2048(x);
+			CLIP_S2048(x);
 			sum += x;
 			if(sum & 1)
 				F[7][7] = x;
@@ -918,6 +977,8 @@ const char* idct(int b)
 	// f(x,y) = --- Σ  Σ  C(u)C(v)F(u,v) cos --------- cos ---------
 	//           N  u=0 v=0                        2N            2N
 	// (N=8)
+	int oy = (b & ~1) << 2;
+	int ox = (b & 1) << 3;
 
 	// /*
 	for(int y = 0; y < 8; ++y) for(int x = 0; x < 8; ++x)
@@ -930,7 +991,7 @@ const char* idct(int b)
 			if(v == 0) d *= M_SQRT1_2;
 			s += d;
 		}
-		f[y][x] = (int)(s / 4);
+		f[y+oy][x+ox] = (int)(s / 4);
 	}
 	//-*/
 	// extern void simple_idct(int L[8][8], int S[8][8]);
@@ -942,9 +1003,58 @@ const char* idct(int b)
 		nslice, nmb, b);
 	for(int y = 0; y < 8; ++y)
 		dump(dump_sf, NULL, " %4d %4d %4d %4d %4d %4d %4d %4d",
-			f[y][0], f[y][1], f[y][2], f[y][3],
-			f[y][4], f[y][5], f[y][6], f[y][7]);
+			f[y+oy][0+ox], f[y+oy][1+ox], f[y+oy][2+ox], f[y+oy][3+ox],
+			f[y+oy][4+ox], f[y+oy][5+ox], f[y+oy][6+ox], f[y+oy][7+ox]);
 	return NULL;
 }
 
+const char* mc()
+{
+	if(mb_intra)
+	{
+		// saturation だけ行う
+		for(int y = CHROMA_FMT_MBH[chroma_fmt] - 1; y >= 0; --y) for(int x = 0; x < 16; ++x)
+		{
+			int i = f[y][x];
+			CLIP_US255(i);
+			d[y][x] = i;
+		}
+		return NULL;
+	}
+
+/*
+	// モーションベクトルのデコード
+	{
+		int r_size = f_code[s][t] - 1;
+		int f = 1 << r_size;
+		int high = (16 * f) - 1;
+		int low = (-16 * f);
+		int range = 32 * f;
+		int delta;
+
+		if(f == 1 || mo_code[r][s][t] == 0)
+			delta = mo_code[r][s][t];
+		else
+		{
+			delta = (abs(mo_code[r][s][t] - 1) * f) + mo_residual[r][s][t] + 1;
+			if(mo_code[r][s][t] < 0) delta = -delta;
+		}
+
+		int pred = PMV[r][s][t];
+		if(mv_format == 'r' && t == 1 && picture_struct == PIC_STRUCT_FRAME)
+			pred /= 2;
+
+		int x = pred + delta;
+		if(x < low) x += range;
+		if(x > high) x -= range;
+		vector[r][s][t] = x;
+
+		if(mv_format == 'r' && t == 1 && picture_struct == PIC_STRUCT_FRAME)
+			PMV[r][s][t] = x * 2;
+		else
+			PMV[r][s][t] = x;
+	}
+*/
+	return NULL;
+}
 
