@@ -33,6 +33,9 @@ simple_idct.c: simple_idct.rb
 clean:
 	@rm -f $(OBJS) $(TARGET) dump.{c,h} simple_idct.c
 
-test: $(TEST) $(TARGET)
+.PHONY: test
+test: ref_$(TEST)/mb.txt
+
+ref_$(TEST)/mb.txt: $(TEST) $(TARGET)
 	./$(TARGET) -v $< -s 120 -r > $<.log
 

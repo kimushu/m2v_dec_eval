@@ -83,7 +83,7 @@ int cbp420, cbp1, cbp2, pattern_code[12];
 
 // block
 int dct_dc_diff, dc_dct_pred[3];
-int QFS[64];
+int QFS[64], QF[8][8];
 
 static const char* const PCT_STRING = "0IPB4567";	// '4'=='D' if ISO11172-2
 static const char* const CHROMA_FMT_NAME[] = {"reserved", "4:2:0", "4:2:2", "4:4:4"};
@@ -210,17 +210,27 @@ static const char* sequence_header()
 	if(bs_gets(1) == 0b1)
 	{
 		printf("intra_quant_matrix:\n");
-		for(int i = 0; i < 64; ++i)
-			printf(" %3d%s", intra_qmat[0][i] = bs_gets(8),
-				(i & 7) == 7 ? "\n" : "");
+		int tmp[64];
+		for(int i = 0; i < 64; ++i) tmp[i] = bs_gets(8);
+		for(int v = 0; v < 8; ++v) for(int u = 0; u < 8; ++u)
+		{
+			printf(" %3d%s",
+				intra_qmat[v][u] = tmp[ZIGZAG_SCAN[0][v][u]],
+				u == 7 ? "\n" : "");
+		}
 	}
 	else memcpy(intra_qmat, DEF_INTRA_QMAT, sizeof(intra_qmat));
 	if(bs_gets(1) == 0b1)
 	{
 		printf("non_intra_quant_matrix:");
-		for(int i = 0; i < 64; ++i)
-			printf(" %3d%s", nonintra_qmat[0][i] = bs_gets(8),
-				(i & 7) == 7 ? "\n" : "");
+		int tmp[64];
+		for(int i = 0; i < 64; ++i) tmp[i] = bs_gets(8);
+		for(int v = 0; v < 8; ++v) for(int u = 0; u < 8; ++u)
+		{
+			printf(" %3d%s",
+				nonintra_qmat[v][u] = tmp[ZIGZAG_SCAN[0][v][u]],
+				u == 7 ? "\n" : "");
+		}
 	}
 	else for(int i = 0; i < 64; ++i) nonintra_qmat[0][i] = 16;
 	bs_align(8);
@@ -777,11 +787,23 @@ static const char* block(int b)
 	printf("QFS last: %d\n", i);
 	dump(dump_qfs, NULL, "# slice %6d, mb %4d, block %2d", nslice, nmb, b);
 	for(int j = 0; j <= (64 - 16); j += 16)
+	{
 		dump(dump_qfs, NULL, " %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d",
 			QFS[j+0], QFS[j+1], QFS[j+2], QFS[j+3],
 			QFS[j+4], QFS[j+5], QFS[j+6], QFS[j+7],
 			QFS[j+8], QFS[j+9], QFS[j+10], QFS[j+11],
 			QFS[j+12], QFS[j+13], QFS[j+14], QFS[j+15]);
+	}
+
+	// inverse scan
+	dump(dump_qf, NULL, "# slice %6d, mb %4d, block %2d", nslice, nmb, b);
+	for(int v = 0; v < 8; ++v)
+	{
+		for(int u = 0; u < 8; ++u) QF[v][u] = QFS[ZIGZAG_SCAN[alt_scan][v][u]];
+		dump(dump_qf, NULL, " %5d %5d %5d %5d %5d %5d %5d %5d",
+			QF[v][0], QF[v][1], QF[v][2], QF[v][3],
+			QF[v][4], QF[v][5], QF[v][6], QF[v][7]);
+	}
 
 	return NULL;
 }
