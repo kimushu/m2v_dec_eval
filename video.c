@@ -33,8 +33,9 @@ static const char* motion_vectors(int s);
 static const char* motion_vector(int r, int s);
 static const char* coded_block_pattern();
 static const char* block(int b);
-// static const char* dequant(int b);
-// static const char* idct(int b);
+static const char* block_coefs(int b);
+static const char* dequant(int b);
+static const char* idct(int b);
 
 // sequence_header
 int horz_size, vert_size, aspect_ratio, frame_rate_code,
@@ -83,7 +84,10 @@ int cbp420, cbp1, cbp2, pattern_code[12];
 
 // block
 int dct_dc_diff, dc_dct_pred[3];
-int QFS[64], QF[8][8];
+int QFS[64], QF[8][8], F[8][8], f[8][8];
+
+// idct (slow, but easy to understand)
+static double IDCT_SLOW_COS[32][32];
 
 static const char* const PCT_STRING = "0IPB4567";	// '4'=='D' if ISO11172-2
 static const char* const CHROMA_FMT_NAME[] = {"reserved", "4:2:0", "4:2:2", "4:4:4"};
@@ -116,6 +120,10 @@ static const int DEF_INTRA_QMAT[8][8] = {
 	{ 26, 27, 29, 34, 38, 46, 56, 69 },
 	{ 27, 29, 35, 38, 46, 56, 69, 83 },
 };
+static const int INTRA_DC_MULT[4] = {8, 4, 2, 1};
+static const int QUANT_SCALE[2][32] = {
+{0,2,4,6,8,10,12,14,16,18,20,22,24,26,28,30,32,34,36,38,40,42,44,46,48,50,52,54,56,58,60,62},
+{0,1,2,3,4,5,6,7,8,10,12,14,16,18,20,22,24,28,32,36,40,44,48,52,56,64,72,80,88,96,104,112}};
 
 #define PICTURE_START_CODE	0x00000100
 #define UDATA_START_CODE	0x000001b2
@@ -132,12 +140,22 @@ static const int DEF_INTRA_QMAT[8][8] = {
 #define PIC_STRUCT_BTMF		2
 #define PIC_STRUCT_FRAME	3
 
+#define CLIP_2048(x)		({ if((x) < -2048) (x) = -2048; else if((x) > 2047) (x) = 2047; })
+
 const char* decode_video(const char* ref_dir, int slices, int skips)
 {
 	max_slices = slices;
 	skip_slices = skips;
 	nslice = 0;
 	CALL(dump_init(ref_dir));
+
+	// idctテーブルの初期化
+	for(int i = 0; i < 16; ++i) for(int j = 0; j < 16; ++j)
+	{
+		IDCT_SLOW_COS[i+16][j+16] = IDCT_SLOW_COS[i][j] =
+			cos(i * M_PI / 16) * cos(j * M_PI / 16);
+		IDCT_SLOW_COS[i+16][j] = IDCT_SLOW_COS[i][j+16] = -IDCT_SLOW_COS[i][j];
+	}
 
 	// ISO-13818-2-DRAFT p.42
 	bs_nextcode(0x000001, 3);
@@ -559,7 +577,7 @@ static const char* macroblock()
 	dump(dump_mb, "bytepos bitpos", "0x%x %d", g_total_bits / 8, g_total_bits % 8);
 	CALL(macroblock_modes());
 	if(mb_quant) printf("mb_q_scale_code: %d\n", mb_q_scale_code = bs_gets(5));
-	else mb_q_scale_code = 0;
+	else mb_q_scale_code = q_scale_code;
 	if(mb_mo_fw || (mb_intra && conceal_mv)) CALL(motion_vectors(0));
 	if(mb_mo_bw) CALL(motion_vectors(1));
 	if(mb_intra && conceal_mv && bs_gets(1) != 0b1)
@@ -686,6 +704,7 @@ static const char* coded_block_pattern()
 			for(int i = 6; i < 12; ++i)
 				if(cbp2 & (1 << (11-i))) pattern_code[i] = 1;
 	}
+	else for(int i = 0; i < 12; ++i) pattern_code[i] = 1;	// TODO: これでいいのか？要調査
 	printf("pattern_code:");
 	for(int i = 0; i < block_count; ++i) printf(" %d", pattern_code[i]);
 	printf("\n");
@@ -695,7 +714,26 @@ static const char* coded_block_pattern()
 static const char* block(int b)
 {
 	printf("---- BLOCK (S:%04d, M:%04d, B:%d) ----\n", nslice, nmb, b);
-	if(!pattern_code[b]) return NULL;
+
+	// load coefficients
+	CALL(block_coefs(b));
+
+	// dequantisation
+	CALL(dequant(b));
+
+	// inverse DCT
+	CALL(idct(b));
+
+	return NULL;
+}
+
+static const char* block_coefs(int b)
+{
+	if(!pattern_code[b])
+	{
+		memset(QF, 0, sizeof(QF));
+		return NULL;
+	}
 
 	int i;
 	const VLC_ENTRY* table_dct =
@@ -747,7 +785,7 @@ static const char* block(int b)
 		// NOTE2 - “End of Block” shall not be the only code of the block.
 		// の解釈がどうも分からない...
 		// 「EOB だけのブロックは存在し得ない(EOBが最初に来ることはない)」
-		// と思えばいいのか？
+		// と思えばいいのか？→その解釈であっているようだ。
 		int run, level;
 		if(c == -1)
 			break;	// End of block
@@ -808,171 +846,105 @@ static const char* block(int b)
 	return NULL;
 }
 
-/*
-static const char* block(int bn)
+const char* dequant(int b)
 {
-	memset(qfs, 0, sizeof(qfs));
-	printf("---- BLOCK (S:%04d, M:%04d, B:%d) ----\n", nslice, nmb, bn);
-	if(pat_code[bn])
+	// F[v][u] = ((2×QF[v][u]+k)×W[w][v][u]×quant_scale)/32
+	// where: k = 0              (intra)
+	//            sign(QF[v][u]) (non-intra)
+
+	int qs = QUANT_SCALE[q_scale_type][mb_q_scale_code];
+
+	if(!pattern_code[b])
+		memset(F, 0, sizeof(F));
+	else if(mb_intra)
 	{
-		int pos = 0;
-		if(mb_intra)
-		{
-			if(bn < 4)
-			{
-				int dc_size_luma = bs_vlc(vlc_table_b5a);
-				if(dc_size_luma > 0) qfs[pos++] = bs_get(dc_size_luma) + dc_dct_pred[0];
-			}
-			else
-			{
-				int dc_size_chroma = bs_vlc(vlc_table_b5b);
-				if(dc_size_chroma > 0) qfs[pos++] = bs_get(dc_size_chroma) + dc_dct_pred[bn - 3];
-			}
-		}
-		else
-		{
-			int v = bs_vlc(vlc_table_dct_f);
-			int run = v / 1000;
-			int level = (v % 1000) - 500;
-			if(run == 999)
-			{
-				run = bs_gets(6);
-				level = bs_gets(8);
-				if(level >= 128) level -= 256;
-			}
-			if(level == 0) level = bs_gets(8);
-			if(level == -128) level = ((int)bs_gets(8)) - 256;
-			// printf("dct_coef_first: run=%d, level=%d\n", run, level);
-			pos += run;
-			qfs[pos++] = level;
-		}
-		if(pic_coding_type != 4)
-		{
-			while(bs_peek(2) != 0b10)
-			{
-				int v = bs_vlc(vlc_table_dct_n);
-				int run = v / 1000;
-				int level = (v % 1000) - 500;
-				if(run == 999)
-				{
-					run = bs_gets(6);
-					level = bs_gets(8);
-					if(level >= 128) level -= 256;
-				}
-				if(level == 0) level = bs_gets(8);
-				if(level == -128) level = ((int)bs_gets(8)) - 256;
-				// printf("dct_coef_next: run=%d, level=%d\n", run2, level2);
-				pos += run;
-				if(pos >= 64) return "invalid QFS position!";
-				qfs[pos++] = level;
-			}
-			bs_gets(2);
-		}
-	}
+		// intra
 
-	// zigzag de-scan
-	for(int u = 0; u < 8; ++u) for(int v = 0; v < 8; ++v)
-		qf[v][u] = qfs[zigzag_scan[v][u]];
+		// DC は定数乗算のみ
+		F[0][0] = QF[0][0] * INTRA_DC_MULT[intra_dc_precision];
 
-	// dump (before dequant)
-	dump(dump_block, NULL, "# slice %6d, mb %4d, block %d (%s)",
-		nslice, nmb, bn, bn > 4 ? "chroma" : "luma");
-	for(int v = 0; v < 8; ++v)
-	{
-		char sz[3];
-		sz[0] = 'v';
-		sz[1] = v + '0';
-		sz[2] = 0;
-		dump(dump_block, sz, " %4d %4d %4d %4d %4d %4d %4d %4d ",
-			qf[v][0], qf[v][1], qf[v][2], qf[v][3],
-			qf[v][4], qf[v][5], qf[v][6], qf[v][7]);
-	}
-
-	// dequant
-	CALL(dequant(bn));
-
-	// idct
-	if(pat_code[bn]) CALL(idct(bn));
-
-	return NULL;
-}
-
-
-static int sgn(int v)
-{
-	if(v < 0) return -1;
-	if(v > 0) return 1;
-	return 0;
-}
-
-
-static const char* dequant(int bn)
-{
-	int qs = quant_scale + mb_quant_scale;
-	if(mb_intra)
-	{
-		for(int v = 0; v < 8; ++v) for(int u = 0; u < 8; ++u)
-		{
-			if(!v && !u) continue;	// (0,0)は除く
-			int x = 2 * qf[v][u] * qs * intra_qmat[v][u] / 16;
-			if(!(x & 1)) x -= sgn(x);
-			if(x > 2047) x = 2047;
-			if(x < -2048) x = -2048;
-			lf[v][u] = x;
-		}
+		// DC 以外
+		for(int v = 0; v < 8; ++v) for(int u = (v > 0) ? 0 : 1; u < 8; ++u)
+			F[v][u] = (2 * QF[v][u]) * intra_qmat[v][u] * qs / 32;
 	}
 	else
 	{
+		// non intra
 		for(int v = 0; v < 8; ++v) for(int u = 0; u < 8; ++u)
 		{
-			int x = (2 * qf[v][u] + sgn(qf[v][u])) * qs * nonintra_qmat[v][u] / 16;
-			if(!(x & 1)) x -= sgn(x);
-			if(x > 2047) x = 2047;
-			if(x < -2048) x = -2048;
-			lf[v][u] = x;
+			int x = 2 * QF[v][u];
+			if(x < 0) --x;
+			if(x > 0) ++x;
+			F[v][u] = x * nonintra_qmat[v][u] * qs / 32;
 		}
 	}
 
-	dump(dump_dequant, NULL, "# slice %6d, mb %4d, block %d (%s)",
-		nslice, nmb, bn, blk_desc[bn]);
+	dump(dump_lf, NULL, "# slice %6d, mb %4d, block %2d", nslice, nmb, b);
+
+	// clipping & mismatch control
+	int sum = 0;		// RTL実装時は足す必要がなく、LSBだけ見ていればよい
 	for(int v = 0; v < 8; ++v)
-		dump(dump_dequant, NULL, " %5d %5d %5d %5d %5d %5d %5d %5d",
-			lf[v][0], lf[v][1], lf[v][2], lf[v][3],
-			lf[v][4], lf[v][5], lf[v][6], lf[v][7]);
+	{
+		for(int u = (v == 7) ? 6 : 7; u > 0; --u)
+		{
+			int x = F[v][u];
+			CLIP_2048(x);
+			F[v][u] = x;
+			sum += x;
+		}
+
+		if(v == 7)
+		{
+			int x = F[7][7];
+			CLIP_2048(x);
+			sum += x;
+			if(sum & 1)
+				F[7][7] = x;
+			else
+				F[7][7] = x ^ 1;	// if(x & 1) {x - 1} else {x + 1} と同義
+		}
+
+		dump(dump_lf, NULL, " %5d %5d %5d %5d %5d %5d %5d %5d",
+			F[v][0], F[v][1], F[v][2], F[v][3],
+			F[v][4], F[v][5], F[v][6], F[v][7]);
+	}
 
 	return NULL;
 }
 
-
-const char* idct(int bn)
+const char* idct(int b)
 {
-	// x_{i,j}= 2/N Σ_{k=0}^{N-1}Σ_{l=0}^{N-1}C(k)C(l)x_{k,l}cos(πk(2i+1)/2N)cos(πl(2j+1)/2N)
-	// N=8
-	/-*
-	for(int j = 0; j < 8; ++j) for(int i = 0; i < 8; ++i)
+	//           2  N-1 N-1                    (2x+1)uπ     (2y+1)vπ
+	// f(x,y) = --- Σ  Σ  C(u)C(v)F(u,v) cos --------- cos ---------
+	//           N  u=0 v=0                        2N            2N
+	// (N=8)
+
+	// /*
+	for(int y = 0; y < 8; ++y) for(int x = 0; x < 8; ++x)
 	{
 		double s = 0.0;
-		for(int k = 0; k < 8; ++k) for(int l = 0; l < 8; ++l)
+		for(int v = 0; v < 8; ++v) for(int u = 0; u < 8; ++u)
 		{
-			double d = lf[l][k] * cos(M_PI * k * (2 * i + 1) / 16) * cos(M_PI * l * (2 * j + 1) / 16);
-			if(k == 0) d *= M_SQRT1_2;
-			if(l == 0) d *= M_SQRT1_2;
+			double d = F[v][u] * IDCT_SLOW_COS[((2 * x + 1) * u) % 32][((2 * y + 1) * v) % 32];
+			if(u == 0) d *= M_SQRT1_2;
+			if(v == 0) d *= M_SQRT1_2;
 			s += d;
 		}
-		sf[j][i] = (int)s;
+		f[y][x] = (int)(s / 4);
 	}
-	*-/
-	extern void simple_idct(int L[8][8], int S[8][8]);
-	simple_idct(lf, sf);
+	//-*/
+	// extern void simple_idct(int L[8][8], int S[8][8]);
+	// simple_idct(F, f);
 
-	dump(dump_idct, NULL, "# slice %6d, mb %4d, block %d (%s)",
-		nslice, nmb, bn, blk_desc[bn]);
+	// TODO:IDCTの結果は 9-bit で表されるらしいが、符号は含むの？含まないの？
+
+	dump(dump_sf, NULL, "# slice %6d, mb %4d, block %d",
+		nslice, nmb, b);
 	for(int y = 0; y < 8; ++y)
-		dump(dump_idct, NULL, " %5d %5d %5d %5d %5d %5d %5d %5d",
-			sf[y][0], sf[y][1], sf[y][2], sf[y][3],
-			sf[y][4], sf[y][5], sf[y][6], sf[y][7]);
+		dump(dump_sf, NULL, " %4d %4d %4d %4d %4d %4d %4d %4d",
+			f[y][0], f[y][1], f[y][2], f[y][3],
+			f[y][4], f[y][5], f[y][6], f[y][7]);
 	return NULL;
 }
-*/
 
 
