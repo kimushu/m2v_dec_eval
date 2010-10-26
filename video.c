@@ -170,9 +170,11 @@ const char* decode_video(const char* ref_dir, int slices, int skips)
 
 	// idctテーブルの初期化
 	for(int i = 0; i < 16; ++i) for(int j = 0; j < 16; ++j)
+	// for(int i = 0; i < 32; ++i) for(int j = 0; j < 32; ++j)
 	{
-		IDCT_SLOW_COS[i+16][j+16] = IDCT_SLOW_COS[i][j] =
-			cos(i * M_PI / 16) * cos(j * M_PI / 16);
+		IDCT_SLOW_COS[i+16][j+16] =
+		IDCT_SLOW_COS[i][j] =
+			cos((double)i * M_PI / 16) * cos((double)j * M_PI / 16);
 		IDCT_SLOW_COS[i+16][j] = IDCT_SLOW_COS[i][j+16] = -IDCT_SLOW_COS[i][j];
 	}
 
@@ -269,7 +271,13 @@ static const char* sequence_header()
 				u == 7 ? "\n" : "");
 		}
 	}
-	else memcpy(intra_qmat, DEF_INTRA_QMAT, sizeof(intra_qmat));
+	else
+	{
+		// まさか...
+		memcpy(intra_qmat, DEF_INTRA_QMAT, sizeof(intra_qmat));
+		// for(int v = 0; v < 8; ++v) for(int u = 0; u < 8; ++u)
+		// 	intra_qmat[v][u] = DEF_INTRA_QMAT[0][ZIGZAG_SCAN[0][v][u]];
+	}
 	if(bs_gets(1) == 0b1)
 	{
 		printf("non_intra_quant_matrix:");
@@ -631,21 +639,22 @@ static const char* macroblock()
 
 		// motion compensation
 		CALL(mc());
+	}
 
-		// output to yuv buffer
-		for(int y = 0; y < 16; ++y) for(int x = 0; x < 16; ++x)
+	// output to yuv buffer
+	for(int y = 0; y < 16; ++y) for(int x = 0; x < 16; ++x)
+	{
+		yuv_y[(mb_y * 16 + y) * horz_size + mb_x * 16 + x] = d[y][x];
+	}
+	for(int y = 0; y < 8; ++y)
+	{
+		for(int x = 0; x < 8; ++x)
 		{
-			yuv_y[(mb_y * 16 + y) * horz_size + mb_x * 16 + x] = d[y][x];
-		}
-		for(int y = 0; y < 8; ++y)
-		{
-			for(int x = 0; x < 8; ++x)
-			{
-				yuv_cb[(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = d[y + 16][x];
-				yuv_cr[(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = d[y + 16][x + 8];
-			}
+			// yuv_cb[(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = d[y + 16][x];
+			// yuv_cr[(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = d[y + 16][x + 8];
 		}
 	}
+
 	++nmb;
 	return NULL;
 }
@@ -913,7 +922,7 @@ const char* dequant(int b)
 	// where: k = 0              (intra)
 	//            sign(QF[v][u]) (non-intra)
 
-	int qs = QUANT_SCALE[q_scale_type][mb_q_scale_code];
+	int qs = QUANT_SCALE[q_scale_type][q_scale_code];
 
 	if(!pattern_code[b])
 		memset(F, 0, sizeof(F));
@@ -940,13 +949,13 @@ const char* dequant(int b)
 		}
 	}
 
-	dump(dump_lf, NULL, "# slice %6d, mb %4d, block %2d", nslice, nmb, b);
+	dump(dump_lf, NULL, "# slice %6d, mb %4d, block %2d, qs %2d", nslice, nmb, b, qs);
 
 	// clipping & mismatch control
 	int sum = 0;		// RTL実装時は足す必要がなく、LSBだけ見ていればよい
 	for(int v = 0; v < 8; ++v)
 	{
-		for(int u = (v == 7) ? 6 : 7; u > 0; --u)
+		for(int u = 0; u < 8; ++u)
 		{
 			int x = F[v][u];
 			CLIP_S2048(x);
@@ -954,16 +963,8 @@ const char* dequant(int b)
 			sum += x;
 		}
 
-		if(v == 7)
-		{
-			int x = F[7][7];
-			CLIP_S2048(x);
-			sum += x;
-			if(sum & 1)
-				F[7][7] = x;
-			else
-				F[7][7] = x ^ 1;	// if(x & 1) {x - 1} else {x + 1} と同義
-		}
+		if(v == 7 && !(sum & 1))
+			F[7][7] ^= 1;	// if(x & 1) {x - 1} else {x + 1} と同義
 
 		dump(dump_lf, NULL, " %5d %5d %5d %5d %5d %5d %5d %5d",
 			F[v][0], F[v][1], F[v][2], F[v][3],
@@ -988,20 +989,22 @@ const char* idct(int b)
 		double s = 0.0;
 		for(int v = 0; v < 8; ++v) for(int u = 0; u < 8; ++u)
 		{
-			double d = F[v][u] * IDCT_SLOW_COS[((2 * x + 1) * u) % 32][((2 * y + 1) * v) % 32];
+			double d = (double)F[v][u] * IDCT_SLOW_COS[((2 * x + 1) * u) % 32][((2 * y + 1) * v) % 32];
 			if(u == 0) d *= M_SQRT1_2;
 			if(v == 0) d *= M_SQRT1_2;
 			s += d;
 		}
-		int i = (int)(s / 4);
+		s /= 2;
+		if(s > 0) s = (s + 1) / 2;
+		if(s < 0) s = (s - 1) / 2;
+		// int i = (int)(s / 4);
+		int i = (int)s;
 		CLIP_S256(i);
 		f[y+oy][x+ox] = i;
 	}
 	//-*/
 	// extern void simple_idct(int L[8][8], int S[8][8]);
 	// simple_idct(F, f);
-
-	// TODO:IDCTの結果は 9-bit で表されるらしいが、符号は含むの？含まないの？
 
 	dump(dump_sf, NULL, "# slice %6d, mb %4d, block %d",
 		nslice, nmb, b);
@@ -1019,16 +1022,18 @@ const char* mc()
 		// saturation だけ行う
 		for(int y = CHROMA_FMT_MBH[chroma_fmt] - 1; y >= 16; --y) for(int x = 0; x < 16; ++x)
 		{
-			int i = f[y][x];
-			if(i < 16) i = 16;
-			if(i > 240) i = 240;
+			int i = f[y][x] * 224 / 256 + 16;
+			// if(i < 16) i = 16;
+			// if(i > 240) i = 240;
+			CLIP_US255(i);
 			d[y][x] = i;
 		}
 		for(int y = 0; y < 16; ++y) for(int x = 0; x < 16; ++x)
 		{
-			int i = f[y][x];
-			if(i < 16) i = 16;
-			if(i > 235) i = 235;
+			int i = f[y][x] * 219 / 256 + 16;
+			// if(i < 16) i = 16;
+			// if(i > 235) i = 235;
+			CLIP_US255(i);
 			d[y][x] = i;
 		}
 		return NULL;
