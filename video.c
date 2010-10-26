@@ -642,7 +642,7 @@ static const char* macroblock()
 			for(int x = 0; x < 8; ++x)
 			{
 				yuv_cb[(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = d[y + 16][x];
-				yuv_cr[(mb_y * 8 + y) * horz_size / 2 + mb_y * 8 + x] = d[y + 16][x + 8];
+				yuv_cr[(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = d[y + 16][x + 8];
 			}
 		}
 	}
@@ -783,7 +783,7 @@ static const char* block(int b)
 	CALL(dequant(b));
 
 	// inverse DCT
-	CALL(idct(b));
+	if(pattern_code[b]) CALL(idct(b));
 
 	return NULL;
 }
