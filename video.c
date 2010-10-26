@@ -486,9 +486,9 @@ static const char* picture_coding_extension()
 static const char* picture_data()
 {
 	uint32_t n;
-	memset(yuv_y, 0, horz_size * vert_size);
-	memset(yuv_cb, 0, horz_size * vert_size / 4);
-	memset(yuv_cr, 0, horz_size * vert_size / 4);
+	memset(yuv_y, 16, horz_size * vert_size);
+	memset(yuv_cb, 128, horz_size * vert_size / 4);
+	memset(yuv_cr, 128, horz_size * vert_size / 4);
 	do
 	{
 		CALL(slice());
@@ -641,8 +641,8 @@ static const char* macroblock()
 		{
 			for(int x = 0; x < 8; ++x)
 			{
-				yuv_cr[(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = d[y + 16][x];
-				yuv_cb[(mb_y * 8 + y) * horz_size / 2 + mb_y * 8 + x] = d[y + 16][x + 8];
+				yuv_cb[(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = d[y + 16][x];
+				yuv_cr[(mb_y * 8 + y) * horz_size / 2 + mb_y * 8 + x] = d[y + 16][x + 8];
 			}
 		}
 	}
@@ -1017,10 +1017,18 @@ const char* mc()
 	if(mb_intra)
 	{
 		// saturation だけ行う
-		for(int y = CHROMA_FMT_MBH[chroma_fmt] - 1; y >= 0; --y) for(int x = 0; x < 16; ++x)
+		for(int y = CHROMA_FMT_MBH[chroma_fmt] - 1; y >= 16; --y) for(int x = 0; x < 16; ++x)
 		{
 			int i = f[y][x];
-			CLIP_US255(i);
+			if(i < 16) i = 16;
+			if(i > 240) i = 240;
+			d[y][x] = i;
+		}
+		for(int y = 0; y < 16; ++y) for(int x = 0; x < 16; ++x)
+		{
+			int i = f[y][x];
+			if(i < 16) i = 16;
+			if(i > 235) i = 235;
 			d[y][x] = i;
 		}
 		return NULL;

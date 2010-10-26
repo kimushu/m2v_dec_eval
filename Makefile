@@ -5,7 +5,7 @@
 
 TARGET = m2vdec
 
-TEST = gs_m2v.mpg.vs
+TEST = gs_m2v el_m2v sd_m2v
 
 SOURCES = main.c ps.c bitstream.c video.c vlc.c dump.c simple_idct.c
 
@@ -34,8 +34,8 @@ clean:
 	@rm -f $(OBJS) $(TARGET) dump.{c,h} simple_idct.c
 
 .PHONY: test
-test: ref_$(TEST)/mb.txt
+test: $(foreach t,$(TEST),ref_$(t).mpg.vs/mb.txt)
 
-ref_$(TEST)/mb.txt: $(TEST) $(TARGET)
+ref_%/mb.txt: % $(TARGET)
 	./$(TARGET) -v $< -s 120 -r > $<.log
 
