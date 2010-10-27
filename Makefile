@@ -7,7 +7,7 @@ TARGET = m2vdec
 
 TEST = gs_m2v el_m2v sd_m2v
 
-SOURCES = main.c ps.c bitstream.c video.c vlc.c dump.c simple_idct.c
+SOURCES = main.c ps.c bitstream.c video.c vlc.c dump.c simple_idct.c ffmpeg_idct.c
 
 CC = gcc
 CFLAGS = -Wall -std=c99 -lm
@@ -37,5 +37,5 @@ clean:
 test: $(foreach t,$(TEST),ref_$(t).mpg.vs/mb.txt)
 
 ref_%/mb.txt: % $(TARGET)
-	./$(TARGET) -v $< -s 120 -r > $<.log
+	./$(TARGET) -v $< -s 60 -r > $<.log
 

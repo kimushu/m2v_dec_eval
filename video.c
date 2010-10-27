@@ -625,7 +625,6 @@ static const char* macroblock()
 	CALL(macroblock_modes());
 	if(mb_quant) printf("mb_q_scale_code: %d\n", mb_q_scale_code = bs_gets(5));
 	else mb_q_scale_code = q_scale_code;
-	q_scale_code = mb_q_scale_code;	// 一度でも他の値が出たら上書きされる扱い
 	if(mb_mo_fw || (mb_intra && conceal_mv)) CALL(motion_vectors(0));
 	if(mb_mo_bw) CALL(motion_vectors(1));
 	if(mb_intra && conceal_mv && bs_gets(1) != 0b1)
@@ -650,8 +649,8 @@ static const char* macroblock()
 	{
 		for(int x = 0; x < 8; ++x)
 		{
-			// yuv_cb[(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = d[y + 16][x];
-			// yuv_cr[(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = d[y + 16][x + 8];
+			yuv_cb[(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = d[y + 16][x];
+			yuv_cr[(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = d[y + 16][x + 8];
 		}
 	}
 
@@ -805,6 +804,8 @@ static const char* block_coefs(int b)
 		return NULL;
 	}
 
+	dump(dump_rl, NULL, "# slice %6d, mb %4d, block %2d", nslice, nmb, b);
+
 	int i;
 	const VLC_ENTRY* table_dct =
 		(intra_vlc_fmt && mb_intra) ? vlc_table_b15 : vlc_table_b14;
@@ -836,6 +837,7 @@ static const char* block_coefs(int b)
 			return "QFS[0] overflow!";
 		}
 		dc_dct_pred[cc] = QFS[i++];
+		dump(dump_rl, NULL, " %2d %5d", 0, QFS[0]);
 	}
 	else if(bs_peek(1) == 0b1)
 	{
@@ -846,6 +848,7 @@ static const char* block_coefs(int b)
 			QFS[i++] = -1;
 		else
 			QFS[i++] = 1;
+		dump(dump_rl, NULL, " %2d %5d", 0, QFS[0]);
 	}
 
 	// のこりの係数
@@ -864,19 +867,19 @@ static const char* block_coefs(int b)
 			// escape
 			run = bs_gets(6);
 			level = bs_get(12);
-			if(level >= 2048) level -= 4192;
+			if(level >= 2048) level -= 4096;
 			if(level == -2048 || level == 0) return "level has forbidden value!";
 			printf("### escape used\n");
 		}
 		else if(bs_gets(1))
 		{
 			// level is negative
-			run = c >> 8; level = -(c % 100);
+			run = c >> 8; level = -(c & 255);
 		}
 		else
 		{
 			// level is positive
-			run = c >> 8; level = c % 100;
+			run = c >> 8; level = c & 255;
 		}
 		if(i == 64) return "too much coefficients!";
 		i += run;	// zero run
@@ -889,9 +892,11 @@ static const char* block_coefs(int b)
 			// i = 63;
 			return "invalid QFS index";
 		}
+		dump(dump_rl, NULL, " %2d %5d", run, level);
 		QFS[i++] = level;
 		// printf("QFS[%2d]: %d    (%d skipped)\n", i - 1, level, run);
 	}
+	dump(dump_rl, "eob", " %2d %5d", -1, 0);
 	printf("QFS last: %d\n", i);
 	dump(dump_qfs, NULL, "# slice %6d, mb %4d, block %2d", nslice, nmb, b);
 	for(int j = 0; j <= (64 - 16); j += 16)
@@ -922,7 +927,7 @@ const char* dequant(int b)
 	// where: k = 0              (intra)
 	//            sign(QF[v][u]) (non-intra)
 
-	int qs = QUANT_SCALE[q_scale_type][q_scale_code];
+	int qs = QUANT_SCALE[q_scale_type][mb_q_scale_code];
 
 	if(!pattern_code[b])
 		memset(F, 0, sizeof(F));
@@ -983,7 +988,8 @@ const char* idct(int b)
 	int oy = (b & ~1) << 2;
 	int ox = (b & 1) << 3;
 
-	// /*
+// /*
+	// /-*
 	for(int y = 0; y < 8; ++y) for(int x = 0; x < 8; ++x)
 	{
 		double s = 0.0;
@@ -1006,12 +1012,30 @@ const char* idct(int b)
 	// extern void simple_idct(int L[8][8], int S[8][8]);
 	// simple_idct(F, f);
 
+// /*
 	dump(dump_sf, NULL, "# slice %6d, mb %4d, block %d",
 		nslice, nmb, b);
 	for(int y = 0; y < 8; ++y)
 		dump(dump_sf, NULL, " %4d %4d %4d %4d %4d %4d %4d %4d",
 			f[y+oy][0+ox], f[y+oy][1+ox], f[y+oy][2+ox], f[y+oy][3+ox],
 			f[y+oy][4+ox], f[y+oy][5+ox], f[y+oy][6+ox], f[y+oy][7+ox]);
+// */
+/*
+	extern void ff_simple_idct(int* block);
+	int f2[8][8];
+	memcpy(f2, F, sizeof(f2));
+	ff_simple_idct((int*)f2);
+	for(int y = 0; y < 8; ++y) for(int x = 0; x < 8; ++x) CLIP_S256(f2[y][x]);
+
+	dump(dump_sf2, NULL, "# slice %6d, mb %4d, block %d",
+		nslice, nmb, b);
+	for(int y = 0; y < 8; ++y)
+		dump(dump_sf2, NULL, " %4d %4d %4d %4d %4d %4d %4d %4d",
+			f[y+oy][0+ox] = f2[y][0], f[y+oy][1+ox] = f2[y][1],
+			f[y+oy][2+ox] = f2[y][2], f[y+oy][3+ox] = f2[y][3],
+			f[y+oy][4+ox] = f2[y][4], f[y+oy][5+ox] = f2[y][5],
+			f[y+oy][6+ox] = f2[y][6], f[y+oy][7+ox] = f2[y][7]);
+// */
 	return NULL;
 }
 
