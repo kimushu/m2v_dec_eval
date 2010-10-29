@@ -157,6 +157,9 @@ static const int QUANT_SCALE[2][32] = {
 #define PIC_STRUCT_BTMF		2
 #define PIC_STRUCT_FRAME	3
 
+#define MV_FORMAT_FIELD		0
+#define MV_FORMAT_FRAME		1
+
 #define CLIP_S2048(x)		({ if((x) < -2048) (x) = -2048; else if((x) > 2047) (x) = 2047; })
 #define CLIP_US255(x)		({ if((x) < 0) (x) = 0; else if((x) > 255) (x) = 255; })
 #define CLIP_S256(x)		({ if((x) < -256) (x) = -256; else if((x) > 255) (x) = 255; })
@@ -631,6 +634,11 @@ static const char* macroblock()
 		return "illegal marker-bit (mb)";
 	for(int i = 0; i < 12; ++i) pattern_code[i] = mb_intra;
 	if(mb_pattern) CALL(coded_block_pattern());
+
+	dump(dump_rl, NULL, "# slice %6d, mb %4d", nslice, nmb);
+	dump(dump_rl, "qs_type qs_code intra", " %d %2d %d",
+		q_scale_type, mb_q_scale_code, mb_intra);
+
 	for(int b = 0; b < block_count; ++b)
 	{
 		// block decode
@@ -692,16 +700,16 @@ static const char* macroblock_modes()
 			switch(frame_mo_type = bs_gets(2))
 			{
 			case 1: if(stwc <= 1) {
-					mv_count = 1; mv_format = 'i'; dmv = 0;
+					mv_count = 1; mv_format = MV_FORMAT_FIELD; dmv = 0;
 					} else {
-					mv_count = 1; mv_format = 'i'; dmv = 0; } break;
-			case 2: mv_count = 1; mv_format = 'r'; dmv = 0; break;
-			case 3: mv_count = 1; mv_format = 'i'; dmv = 1; break;
+					mv_count = 1; mv_format = MV_FORMAT_FIELD; dmv = 0; } break;
+			case 2: mv_count = 1; mv_format = MV_FORMAT_FRAME; dmv = 0; break;
+			case 3: mv_count = 1; mv_format = MV_FORMAT_FIELD; dmv = 1; break;
 			default: return "illegal frame_mo_type";
 			}
 			printf("frame_mo_type: %d\n", frame_mo_type);
 			printf("mv_count: %d\n", mv_count);
-			printf("mv_format: '%c'\n", mv_format);
+			printf("mv_format: %s\n", mv_format == MV_FORMAT_FIELD ? "field" : "frame");
 			printf("dmv: %d\n", dmv);
 			if(frame_mo_type != 2)
 				return "non-frame-based prediction is not supported";
@@ -709,7 +717,7 @@ static const char* macroblock_modes()
 		else
 		{
 			mv_count = 1;
-			mv_format = 'r';
+			mv_format = MV_FORMAT_FRAME;
 			dmv = 0;
 		}
 	}
@@ -723,7 +731,7 @@ static const char* motion_vectors(int s)
 {
 	if(mv_count == 1)
 	{
-		if(mv_format == 'i' && dmv != 1)
+		if(mv_format == MV_FORMAT_FIELD && dmv != 1)
 			mo_vert_field_select[0][s] = bs_gets(1);
 		CALL(motion_vector(0, s));
 	}
@@ -896,7 +904,7 @@ static const char* block_coefs(int b)
 		QFS[i++] = level;
 		// printf("QFS[%2d]: %d    (%d skipped)\n", i - 1, level, run);
 	}
-	dump(dump_rl, "eob", " %2d %5d", -1, 0);
+	dump(dump_rl, "eob", " %2d %5d", 0, 0);
 	printf("QFS last: %d\n", i);
 	dump(dump_qfs, NULL, "# slice %6d, mb %4d, block %2d", nslice, nmb, b);
 	for(int j = 0; j <= (64 - 16); j += 16)
@@ -1020,11 +1028,14 @@ const char* idct(int b)
 			f[y+oy][0+ox], f[y+oy][1+ox], f[y+oy][2+ox], f[y+oy][3+ox],
 			f[y+oy][4+ox], f[y+oy][5+ox], f[y+oy][6+ox], f[y+oy][7+ox]);
 // */
-/*
-	extern void ff_simple_idct(int* block);
-	int f2[8][8];
-	memcpy(f2, F, sizeof(f2));
-	ff_simple_idct((int*)f2);
+// /*
+	// extern void ff_simple_idct(int* block);
+	extern void idct_hw(short* block);
+	short f2[8][8];
+	for(int i = 0; i < 64; ++i) f2[0][i] = F[0][i];
+	// memcpy(f2, F, sizeof(f2));
+	// ff_simple_idct((int*)f2);
+	idct_hw((short*)f2);
 	for(int y = 0; y < 8; ++y) for(int x = 0; x < 8; ++x) CLIP_S256(f2[y][x]);
 
 	dump(dump_sf2, NULL, "# slice %6d, mb %4d, block %d",
@@ -1037,6 +1048,12 @@ const char* idct(int b)
 			f[y+oy][6+ox] = f2[y][6], f[y+oy][7+ox] = f2[y][7]);
 // */
 	return NULL;
+}
+
+static int iabs(int x)
+{
+	if(x < 0) return -x;
+	return x;
 }
 
 const char* mc()
@@ -1063,8 +1080,8 @@ const char* mc()
 		return NULL;
 	}
 
-/*
 	// モーションベクトルのデコード
+	for(int r = 0; r < 2; ++r) for(int s = 0; s < 2; ++s) for(int t = 0; t < 2; ++t)
 	{
 		int r_size = f_code[s][t] - 1;
 		int f = 1 << r_size;
@@ -1077,12 +1094,18 @@ const char* mc()
 			delta = mo_code[r][s][t];
 		else
 		{
-			delta = (abs(mo_code[r][s][t] - 1) * f) + mo_residual[r][s][t] + 1;
+			delta = (iabs(mo_code[r][s][t] - 1) * f) + mo_residual[r][s][t] + 1;
 			if(mo_code[r][s][t] < 0) delta = -delta;
 		}
 
+		if(delta < low || delta > high)
+		{
+			printf("delta is out of range: %d [%d:%d]\n", delta, low, high);
+			return "mv_error";
+		}
+
 		int pred = PMV[r][s][t];
-		if(mv_format == 'r' && t == 1 && picture_struct == PIC_STRUCT_FRAME)
+		if(mv_format == MV_FORMAT_FIELD && t == 1 && picture_struct == PIC_STRUCT_FRAME)
 			pred /= 2;
 
 		int x = pred + delta;
@@ -1090,12 +1113,19 @@ const char* mc()
 		if(x > high) x -= range;
 		vector[r][s][t] = x;
 
-		if(mv_format == 'r' && t == 1 && picture_struct == PIC_STRUCT_FRAME)
+		if(mv_format == MV_FORMAT_FIELD && t == 1 && picture_struct == PIC_STRUCT_FRAME)
 			PMV[r][s][t] = x * 2;
 		else
 			PMV[r][s][t] = x;
+
+		if(PMV[r][s][t]< low || PMV[r][s][t] > high)
+		{
+			printf("PMV is out of range: %d [%d:%d]\n", PMV[r][s][t], low, high);
+			return "mv_error";
+		}
+
 	}
-*/
+
 	return NULL;
 }
 
