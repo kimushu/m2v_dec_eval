@@ -76,9 +76,8 @@ static inline void idct_col(elem_t* col)
 {
 	int a0, a1, a2, a3, b0, b1, b2, b3;
 
-	a0 = a1 = a2 = a3 = 0;
+	a0 = a1 = a2 = a3 = (1 << (COL_SHIFT - 1));
 	b0 = b1 = b2 = b3 = 0;
-	col[8*0] += ((1 << (COL_SHIFT-1))/W4);	// 32
 
 	a0       += ( W4 * col[8*0]);
 	  a1     += ( W4 * col[8*0]);
