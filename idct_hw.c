@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include "dump.h"
 
 // ffmpeg をベースにしてます。
 // ベースというよりそのまんまですが ^^;
@@ -133,6 +134,12 @@ void idct_hw(elem_t* block)
 {
 	int i;
 	for(i = 0; i < 8; ++i) idct_row(block + i * 8);
+	for(i = 0; i < 8 && dump_idwb; ++i)
+	{
+		int j;
+		for(j = 0; j < 8; ++j) fprintf(dump_idwb, " %6d", block[i*8+j]);
+		fprintf(dump_idwb, "\n");
+	}
 	for(i = 0; i < 8; ++i) idct_col(block + i);
 }
 

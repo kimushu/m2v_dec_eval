@@ -1035,6 +1035,8 @@ const char* idct(int b)
 	for(int i = 0; i < 64; ++i) f2[0][i] = F[0][i];
 	// memcpy(f2, F, sizeof(f2));
 	// ff_simple_idct((int*)f2);
+	dump(dump_idwb, NULL, "# slice %6d, mb %4d, block %d",
+		nslice, nmb, b);
 	idct_hw((short*)f2);
 	for(int y = 0; y < 8; ++y) for(int x = 0; x < 8; ++x) CLIP_S256(f2[y][x]);
 
