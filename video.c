@@ -95,10 +95,8 @@ int QFS[64], QF[8][8], F[8][8];
 // yuv out buffer
 int af;
 int buf_width, buf_height;
-uint8_t *yuv_y[2], *yuv_cb[2], *yuv_cr[2];
-#define YUV_Y(i, y, x)	(yuv_y[(i)][buf_width * (y) + (x)])
-#define YUV_CB(i, y, x)	(yuv_cb[(i)][(buf_width / 2 * (y)) + (x)])
-#define YUV_CR(i, y, x)	(yuv_cr[(i)][(buf_width / 2 * (y)) + (x)])
+int *fr_buf[2], *fr_u[2], *fr_v[2];
+uint8_t *yuv_y, *yuv_cb, *yuv_cr;
 
 // macroblock data
 //
@@ -172,6 +170,12 @@ static const int QUANT_SCALE[2][32] = {
 #define CLIP_US255(x)		({ if((x) < 0) (x) = 0; else if((x) > 255) (x) = 255; })
 #define CLIP_S256(x)		({ if((x) < -256) (x) = -256; else if((x) > 255) (x) = 255; })
 
+static int iabs(int x)
+{
+	if(x < 0) return -x;
+	return x;
+}
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // ビデオデコードトップ
 //
@@ -237,11 +241,15 @@ static void alloc_yuv_buffers(int width, int height)
 	buf_height = (height + 15) & ~15;
 
 	free_yuv_buffers();
+	yuv_y  = (uint8_t*)malloc(buf_width * buf_height);
+	yuv_cb = (uint8_t*)malloc(buf_width * buf_height / 4);
+	yuv_cr = (uint8_t*)malloc(buf_width * buf_height / 4);
+	fr_buf[0] = (int*)malloc(buf_width * buf_height * 4 * sizeof(int));
+	fr_buf[1] = fr_buf[0] + buf_width * buf_height * 2;
 	for(int i = 0; i < 2; ++i)
 	{
-		yuv_y[i] = (uint8_t*)malloc(buf_width * buf_height);
-		yuv_cb[i] = (uint8_t*)malloc(buf_width * buf_height / 4);
-		yuv_cr[i] = (uint8_t*)malloc(buf_width * buf_height / 4);
+		fr_u[i] = fr_buf[i] + buf_width * buf_height;
+		fr_v[i] = fr_u[i] + buf_width / 2;
 	}
 }
 
@@ -250,13 +258,12 @@ static void alloc_yuv_buffers(int width, int height)
 //
 static void free_yuv_buffers()
 {
-	for(int i = 0; i < 2; ++i)
-	{
-		if(yuv_y[i]) free(yuv_y[i]);
-		if(yuv_cb[i]) free(yuv_cb[i]);
-		if(yuv_cr[i]) free(yuv_cr[i]);
-		yuv_y[i] = yuv_cb[i] = yuv_cr[i] = NULL;
-	}
+	if(yuv_y) free(yuv_y);
+	if(yuv_cb) free(yuv_cb);
+	if(yuv_cr) free(yuv_cr);
+	if(fr_buf[0]) free(fr_buf[0]);
+	yuv_y = yuv_cb = yuv_cr = NULL;
+	for(int i = 0; i < 2; ++i) fr_buf[i] = fr_u[i] = fr_v[i] = NULL;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -567,9 +574,9 @@ static const char* picture_data()
 	while(0x00000101 <= n && n <= 0x000001af);
 	if(dump_yuv)
 	{
-		fwrite(yuv_y[af], 1, horz_size * vert_size, dump_yuv);
-		fwrite(yuv_cr[af], 1, horz_size * vert_size / 4, dump_yuv);
-		fwrite(yuv_cb[af], 1, horz_size * vert_size / 4, dump_yuv);
+		fwrite(yuv_y, 1, horz_size * vert_size, dump_yuv);
+		fwrite(yuv_cr, 1, horz_size * vert_size / 4, dump_yuv);
+		fwrite(yuv_cb, 1, horz_size * vert_size / 4, dump_yuv);
 	}
 	af = 1 - af;
 	return NULL;
@@ -644,6 +651,8 @@ static const char* slice()
 	// 	return "initial skip overflow";
 
 	reset_dc_dct_pred();
+	memset(PMV, 0, sizeof(PMV));
+
 	const char* r = NULL;
 	do
 	{
@@ -684,6 +693,8 @@ static const char* macroblock()
 
 	if(mb_addr_inc > 1 && pic_coding_type == 1)		// ffmpeg mpeg12.c L1817
 		return "illegal MB skip in I frame!";
+	if(mb_addr_inc > 1 && pic_coding_type == 2)
+		memset(PMV, 0, sizeof(PMV));
 
 	prev_mb_addr = (prev_mb_addr + mb_addr_inc) % (mb_width * mb_height);
 	mb_x = prev_mb_addr % mb_width;
@@ -703,6 +714,8 @@ static const char* macroblock()
 	if(mb_mo_bw) CALL(motion_vectors(1));
 	if(mb_intra && conceal_mv && bs_gets(1) != 0b1)
 		return "illegal marker-bit (mb)";
+	if((mb_intra && !conceal_mv) || (!mb_intra && !mb_mo_fw && pic_coding_type == 2))
+		memset(PMV, 0, sizeof(PMV));
 	for(int i = 0; i < 12; ++i) pattern_code[i] = mb_intra;
 	if(mb_pattern) CALL(coded_block_pattern());
 
@@ -794,6 +807,52 @@ static const char* motion_vectors(int s)
 		if(mv_format == MV_FORMAT_FIELD && dmv != 1)
 			mo_vert_field_select[0][s] = bs_gets(1);
 		CALL(motion_vector(0, s));
+
+		// モーションベクトルのデコード
+		int r = 0;
+		for(int t = 0; t < 2; ++t)
+		{
+			int r_size = f_code[s][t] - 1;
+			int f = 1 << r_size;
+			int high = (16 * f) - 1;
+			int low = (-16 * f);
+			int range = 32 * f;
+			int delta;
+
+			if(f == 1 || mo_code[r][s][t] == 0)
+				delta = mo_code[r][s][t];
+			else
+			{
+				delta = (iabs(mo_code[r][s][t] - 1) * f) + mo_residual[r][s][t] + 1;
+				if(mo_code[r][s][t] < 0) delta = -delta;
+			}
+
+			if(delta < low || delta > high)
+			{
+				printf("delta is out of range: %d [%d:%d]\n", delta, low, high);
+				return "mv_error";
+			}
+
+			int pred = PMV[r][s][t];
+			if(mv_format == MV_FORMAT_FIELD && t == 1 && picture_struct == PIC_STRUCT_FRAME)
+				pred /= 2;	// not used
+
+			int x = pred + delta;
+			if(x < low) x += range;
+			if(x > high) x -= range;
+			vector[r][s][t] = x;
+
+			if(mv_format == MV_FORMAT_FIELD && t == 1 && picture_struct == PIC_STRUCT_FRAME)
+				PMV[r][s][t] = x * 2;	// not used
+			else
+				PMV[r][s][t] = x;
+
+			if(PMV[r][s][t]< low || PMV[r][s][t] > high)
+			{
+				printf("PMV is out of range: %d [%d:%d]\n", PMV[r][s][t], low, high);
+				return "mv_error";
+			}
+		}
 	}
 	else
 	{
@@ -1131,12 +1190,6 @@ const char* idct(int b)
 	return NULL;
 }
 
-static int iabs(int x)
-{
-	if(x < 0) return -x;
-	return x;
-}
-
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 // 動き補償
 //
@@ -1158,151 +1211,57 @@ const char* mc(int b)
 			   ので、やっぱり対応いらない？
 
 */
+	memset(p[b], 0, sizeof(p[b]));
 	if(mb_intra)
 	{
 		// イントラの場合
-		memset(p[b], 0, sizeof(p[b]));
 		// for(int y = 0; y < 8; ++y) for(int x = 0; x < 8; ++x)
 		// 	d[b][y][x] = f[b][y][x];
-
-		if(b == 0 && !conceal_mv)
-		{
-			// PMVのゼロクリア
-			memset(PMV, 0, sizeof(PMV));
-		}
+		if(conceal_mv) fprintf(stderr, "conceal_mv!\n");
 		return NULL;
 	}
 
-	// モーションベクトルのデコード
-	for(int r = 0; r < 2; ++r) for(int s = 0; s < 2; ++s) for(int t = 0; t < 2; ++t)
-	{
-		int r_size = f_code[s][t] - 1;
-		int f = 1 << r_size;
-		int high = (16 * f) - 1;
-		int low = (-16 * f);
-		int range = 32 * f;
-		int delta;
-
-		if(f == 1 || mo_code[r][s][t] == 0)
-			delta = mo_code[r][s][t];
-		else
-		{
-			delta = (iabs(mo_code[r][s][t] - 1) * f) + mo_residual[r][s][t] + 1;
-			if(mo_code[r][s][t] < 0) delta = -delta;
-		}
-
-		if(delta < low || delta > high)
-		{
-			printf("delta is out of range: %d [%d:%d]\n", delta, low, high);
-			return "mv_error";
-		}
-
-		int pred = PMV[r][s][t];
-		if(mv_format == MV_FORMAT_FIELD && t == 1 && picture_struct == PIC_STRUCT_FRAME)
-			pred /= 2;
-
-		int x = pred + delta;
-		if(x < low) x += range;
-		if(x > high) x -= range;
-		vector[r][s][t] = x;
-
-		if(mv_format == MV_FORMAT_FIELD && t == 1 && picture_struct == PIC_STRUCT_FRAME)
-			PMV[r][s][t] = x * 2;
-		else
-			PMV[r][s][t] = x;
-
-		if(PMV[r][s][t]< low || PMV[r][s][t] > high)
-		{
-			printf("PMV is out of range: %d [%d:%d]\n", PMV[r][s][t], low, high);
-			return "mv_error";
-		}
-
-	}
-
-	return NULL;
 	if(mb_mo_bw) return "backward is not supported";
-	if(!mb_mo_fw)
+	// if(!mb_mo_fw)
+	// {
+	// 	// fprintf(stderr, "no mb_mo_fw\n");
+	// 	return NULL;
+	// }
+
+	int ivx, ivy, halfx, halfy;
+	ivx = vector[0][0][0];
+	if(b >= 4) ivx /= 2;
+	halfx = ivx & 1;
+	ivx = (ivx & ~1) / 2;
+	ivy = vector[0][0][1];
+	if(b >= 4) ivy /= 2;
+	halfy = ivy & 1;
+	ivy = (ivy & ~1) / 2;
+
+	ivx += (b < 4) ? (mb_x * 16 + (b & 1) * 8) : (mb_x * 8);
+	ivy += (b < 4) ? (mb_y * 16 + (b & 2) * 4) : (mb_y * 8);
+
+	int rf = 1 - af;
+	int* buf = (b < 4) ? fr_buf[rf] : (b == 4) ? fr_u[rf] : fr_v[rf];
+#define BUF(y, x)	(buf[(y) * buf_width + (x)])
+
+	for(int y = 0, oy = ivy; y < 8; ++y, ++oy) for(int x = 0, ox = ivx; x < 8; ++x, ++ox)
 	{
-		printf("no mb_mo_fw\n");
-		return NULL;
+		if(!halfx && !halfy)
+			// 整数精度のみ
+			p[y][x] = BUF(oy, ox);
+		else if(!halfx && halfy)
+			// 垂直方向だけ半画素精度
+			p[y][x] = (BUF(oy, ox) + BUF(oy+1, ox) + 1) / 2;
+		else if(halfx && !halfy)
+			// 水平方向だけ半画素精度
+			p[y][x] = (BUF(oy, ox) + BUF(oy, ox+1) + 1) / 2;
+		else
+			// 水平垂直ともに半画素精度
+			p[y][x] = (BUF(oy, ox) + BUF(oy, ox+1)
+					 + BUF(oy+1, ox) + BUF(oy+1, ox+1) + 2) / 4;
 	}
-
-	for(int b = 0; b < BLK_COUNT[chroma_fmt]; ++b)
-	{
-		int int_vec[2], half_flag[2];
-		for(int i = 0; i < 2; ++i)
-		{
-			int v = vector[0][0][i];
-			if(b >= 4) v /= 2;
-			half_flag[i] = v & 1;
-			int_vec[i] = (v & ~1) / 2;
-		}
-
-		uint8_t* ref = yuv_y[1 - af];
-		int hs = horz_size, ms = 16;
-		int bxs = 0;
-		int bys = 0;
-		if(b == 4)
-		{
-			ref = yuv_cb[1 - af];
-			hs /= 2;
-			ms /= 2;
-			bys = 16;
-		}
-		else if(b == 5)
-		{
-			ref = yuv_cr[1 - af];
-			hs /= 2;
-			ms /= 2;
-			bxs = 8;
-			bys = 16;
-		}
-
-		// yuv_y[af][(mb_y * 16 + y) * horz_size + mb_x * 16 + x] = i;
-		// yuv_cb[af][(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = i;
-		// yuv_cr[af][(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = i;
-		for(int y = 0, by = bys; y < ms; ++y, ++by) for(int x = 0, bx = bxs; x < ms; ++x, ++bx)
-		{
-			printf("int_vec[0] = %d, int_vec[1] = %d\n", int_vec[0], int_vec[1]);
-			if(!half_flag[0] && !half_flag[1])
-			{
-				// 整数精度のみ
-				p[by][bx] = ref[(mb_y * ms + y + int_vec[1]) * hs
-								+ mb_x * ms + x + int_vec[0]];
-			}/*
-			else if(!half_flag[0] && half_flag[1])
-			{
-				// 垂直方向だけ半画素精度
-				p[by][bx] = ((int)ref[(mb_y * ms + y + int_vec[1]) * hs
-								+ mb_x * ms + x + int_vec[0]]
-							+ (int)ref[(mb_y * ms + y + int_vec[1] + 1) * hs
-								+ mb_x * ms + x + int_vec[0]] + 1) / 2;
-			}
-			else if(half_flag[0] && !half_flag[1])
-			{
-				// 水平方向だけ半画素精度
-				p[by][bx] = ((int)ref[(mb_y * ms + y + int_vec[1]) * hs
-								+ mb_x * ms + x + int_vec[0]]
-							+ (int)ref[(mb_y * ms + y + int_vec[1]) * hs
-								+ mb_x * ms + x + int_vec[0] + 1] + 1) / 2;
-			}
-			else
-			{
-				// 水平垂直ともに半画素精度
-				p[by][bx] = ((int)ref[(mb_y * ms + y + int_vec[1]) * hs
-								+ mb_x * ms + x + int_vec[0]]
-							+ (int)ref[(mb_y * ms + y + int_vec[1] + 1) * hs
-								+ mb_x * ms + x + int_vec[0]]
-							+ (int)ref[(mb_y * ms + y + int_vec[1]) * hs
-								+ mb_x * ms + x + int_vec[0] + 1]
-							+ (int)ref[(mb_y * ms + y + int_vec[1] + 1) * hs
-								+ mb_x * ms + x + int_vec[0] + 1] + 2) / 4;
-			}
-			*/
-
-			d[by][bx] = f[by][bx] + p[by][bx];
-		}
-	}
+#undef BUF
 
 	return NULL;
 }
@@ -1315,16 +1274,19 @@ static const char* output_yuv(int b)
 	int bx = (b < 4) ? (mb_x * 16 + (b & 1) * 8) : (mb_x * 8);
 	int by = (b < 4) ? (mb_y * 16 + (b & 2) * 4) : (mb_y * 8);
 	int i;
+	int* buf = (b < 4) ? fr_buf[af] : (b == 4) ? fr_u[af] : fr_v[af];
 
 	for(int y = 0; y < 8; ++y) for(int x = 0; x < 8; ++x)
 	{
-		d[y][x] = f[y][x] + p[y][x];
+		i = f[y][x] + p[y][x];
+		CLIP_US255(i);
+		buf[(by+y)*buf_width+(bx+x)] = d[y][x] = i;
 		if(b < 4) i = d[y][x] * 224 / 256 + 16;
 		else      i = d[y][x] * 219 / 256 + 16;
 		CLIP_US255(i);
-		if(b < 4)		YUV_Y (af, by + y, bx + x) = i;
-		else if(b == 5)	YUV_CB(af, by + y, bx + x) = i;
-		else			YUV_CR(af, by + y, bx + x) = i;
+		if(b < 4)		yuv_y [(by+y)*buf_width+(bx+x)] = i;
+		else if(b == 5)	yuv_cb[(by+y)*buf_width/2+(bx+x)] = i;
+		else			yuv_cr[(by+y)*buf_width/2+(bx+x)] = i;
 	}
 
 	return NULL;
