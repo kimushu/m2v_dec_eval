@@ -565,6 +565,7 @@ static const char* picture_data()
 	// memset(yuv_y, 16, horz_size * vert_size);
 	// memset(yuv_cb, 128, horz_size * vert_size / 4);
 	// memset(yuv_cr, 128, horz_size * vert_size / 4);
+	memcpy(fr_buf[af], fr_buf[1 - af], buf_width * buf_height * 2 * sizeof(int));
 	do
 	{
 		CALL(slice());
@@ -813,6 +814,7 @@ static const char* motion_vectors(int s)
 		for(int t = 0; t < 2; ++t)
 		{
 			int r_size = f_code[s][t] - 1;
+			if(r_size == 14) continue;
 			int f = 1 << r_size;
 			int high = (16 * f) - 1;
 			int low = (-16 * f);
