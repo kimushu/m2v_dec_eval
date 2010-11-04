@@ -38,6 +38,10 @@ static const char* block_coefs(int b);
 static const char* dequant(int b);
 static const char* idct(int b);
 static const char* mc();
+static const char* output_yuv(int b);
+
+static void alloc_yuv_buffers(int width, int height);
+static void free_yuv_buffers();
 
 // sequence_header
 int horz_size, vert_size, aspect_ratio, frame_rate_code,
@@ -45,7 +49,6 @@ int horz_size, vert_size, aspect_ratio, frame_rate_code,
 	bitrate_value, vbv_buf_size, const_param_flag;
 int intra_qmat[8][8], nonintra_qmat[8][8];
 int mb_width, mb_height;
-int vert_bufsize;
 
 // extension data
 int seq_scalable;
@@ -91,7 +94,11 @@ int QFS[64], QF[8][8], F[8][8];
 
 // yuv out buffer
 int af;
+int buf_width, buf_height;
 uint8_t *yuv_y[2], *yuv_cb[2], *yuv_cr[2];
+#define YUV_Y(i, y, x)	(yuv_y[(i)][buf_width * (y) + (x)])
+#define YUV_CB(i, y, x)	(yuv_cb[(i)][(buf_width / 2 * (y)) + (x)])
+#define YUV_CR(i, y, x)	(yuv_cr[(i)][(buf_width / 2 * (y)) + (x)])
 
 // macroblock data
 //
@@ -101,7 +108,7 @@ uint8_t *yuv_y[2], *yuv_cb[2], *yuv_cr[2];
 // C2 C3 (4:2:2)
 // C4 C5
 // C6 C7 (4:4:4)
-int f[48][16], p[48][16], d[48][16];
+int f[8][8], p[8][8], d[8][8];
 
 // idct (slow, but easy to understand)
 static double IDCT_SLOW_COS[32][32];
@@ -165,6 +172,9 @@ static const int QUANT_SCALE[2][32] = {
 #define CLIP_US255(x)		({ if((x) < 0) (x) = 0; else if((x) > 255) (x) = 255; })
 #define CLIP_S256(x)		({ if((x) < -256) (x) = -256; else if((x) > 255) (x) = 255; })
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// ビデオデコードトップ
+//
 const char* decode_video(const char* ref_dir, int slices, int skips)
 {
 	max_slices = slices;
@@ -214,16 +224,44 @@ const char* decode_video(const char* ref_dir, int slices, int skips)
 	while(n != SEQ_END_CODE);
 	bs_get(32);
 	dump_finish();
-	if(yuv_y[0]) free(yuv_y[0]);
-	if(yuv_y[1]) free(yuv_y[1]);
-	if(yuv_cb[0]) free(yuv_cb[0]);
-	if(yuv_cb[1]) free(yuv_cb[1]);
-	if(yuv_cr[0]) free(yuv_cr[0]);
-	if(yuv_cr[1]) free(yuv_cr[1]);
-	yuv_y[0] = yuv_y[1] = yuv_cb[0] = yuv_cb[1] = yuv_cr[0] = yuv_cr[1] = NULL;
+	free_yuv_buffers();
 	return NULL;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// YUV データ用バッファの確保
+//
+static void alloc_yuv_buffers(int width, int height)
+{
+	buf_width = (width + 15) & ~15;
+	buf_height = (height + 15) & ~15;
+
+	free_yuv_buffers();
+	for(int i = 0; i < 2; ++i)
+	{
+		yuv_y[i] = (uint8_t*)malloc(buf_width * buf_height);
+		yuv_cb[i] = (uint8_t*)malloc(buf_width * buf_height / 4);
+		yuv_cr[i] = (uint8_t*)malloc(buf_width * buf_height / 4);
+	}
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// YUV データ用バッファの解放
+//
+static void free_yuv_buffers()
+{
+	for(int i = 0; i < 2; ++i)
+	{
+		if(yuv_y[i]) free(yuv_y[i]);
+		if(yuv_cb[i]) free(yuv_cb[i]);
+		if(yuv_cr[i]) free(yuv_cr[i]);
+		yuv_y[i] = yuv_cb[i] = yuv_cr[i] = NULL;
+	}
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// シーケンスヘッダの取得
+//
 static const char* sequence_header()
 {
 	uint32_t n = bs_get(32);
@@ -235,20 +273,8 @@ static const char* sequence_header()
 	printf("size: %d x %d\n", horz_size, vert_size);
 	mb_width = (horz_size + 15) / 16;
 	mb_height = (vert_size + 15) / 16;
-	vert_bufsize = mb_height * 16;
 
-	if(yuv_y[0]) free(yuv_y[0]);
-	yuv_y[0] = (uint8_t*)malloc(horz_size * vert_bufsize);
-	if(yuv_y[1]) free(yuv_y[1]);
-	yuv_y[1] = (uint8_t*)malloc(horz_size * vert_bufsize);
-	if(yuv_cb[0]) free(yuv_cb[0]);
-	yuv_cb[0] = (uint8_t*)malloc(horz_size * vert_bufsize / 4);
-	if(yuv_cb[1]) free(yuv_cb[1]);
-	yuv_cb[1] = (uint8_t*)malloc(horz_size * vert_bufsize / 4);
-	if(yuv_cr[0]) free(yuv_cr[0]);
-	yuv_cr[0] = (uint8_t*)malloc(horz_size * vert_bufsize / 4);
-	if(yuv_cr[1]) free(yuv_cr[1]);
-	yuv_cr[1] = (uint8_t*)malloc(horz_size * vert_bufsize / 4);
+	alloc_yuv_buffers(horz_size, vert_size);
 	af = 0;
 
 	printf("mb: %d x %d (%d MBs)\n", mb_width, mb_height, mb_width * mb_height);
@@ -287,10 +313,7 @@ static const char* sequence_header()
 	}
 	else
 	{
-		// まさか...
 		memcpy(intra_qmat, DEF_INTRA_QMAT, sizeof(intra_qmat));
-		// for(int v = 0; v < 8; ++v) for(int u = 0; u < 8; ++u)
-		// 	intra_qmat[v][u] = DEF_INTRA_QMAT[0][ZIGZAG_SCAN[0][v][u]];
 	}
 	if(bs_gets(1) == 0b1)
 	{
@@ -310,6 +333,9 @@ static const char* sequence_header()
 	return NULL;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// 拡張/ユーザーデータの取得(というか読み飛ばし)
+//
 static const char* extension_and_user_data(int i)
 {
 	uint32_t n = bs_peek(32);
@@ -323,6 +349,9 @@ static const char* extension_and_user_data(int i)
 	return NULL;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// 拡張データの取得(サポートしない)
+//
 static const char* extension_data(int i)
 {
 	while(bs_peek(32) == EXT_START_CODE)
@@ -340,6 +369,9 @@ static const char* extension_data(int i)
 	return NULL;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// ユーザーデータの読み飛ばし
+//
 static const char* user_data()
 {
 	uint32_t n = bs_get(32);
@@ -350,6 +382,9 @@ static const char* user_data()
 	return NULL;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// シーケンス拡張情報の取得(MPEG2では必須)
+//
 static const char* sequence_extension()
 {
 	uint32_t n = bs_get(32);
@@ -414,6 +449,9 @@ static const char* sequence_scalable_extension()
 }
 */
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// GOP ヘッダの取得(デコードにおいて重要な情報は無いので読み飛ばしでOK)
+//
 static const char* group_of_pictures_header()
 {
 	uint32_t n = bs_get(32);
@@ -434,6 +472,9 @@ static const char* group_of_pictures_header()
 	return NULL;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// ピクチャヘッダの取得 (I,P,B の種別や f_code などが重要)
+//
 static const char* picture_header()
 {
 	uint32_t n = bs_get(32);
@@ -468,6 +509,9 @@ static const char* picture_header()
 	return NULL;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// Picture Coding Extension
+//
 static const char* picture_coding_extension()
 {
 	uint32_t n = bs_get(32);
@@ -505,6 +549,9 @@ static const char* picture_coding_extension()
 	return NULL;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// ピクチャーデータ本体
+//
 static const char* picture_data()
 {
 	uint32_t n;
@@ -518,18 +565,27 @@ static const char* picture_data()
 		n = bs_peek(32);
 	}
 	while(0x00000101 <= n && n <= 0x000001af);
-	fwrite(yuv_y[af], 1, horz_size * vert_size, dump_yuv);
-	fwrite(yuv_cb[af], 1, horz_size * vert_size / 4, dump_yuv);
-	fwrite(yuv_cr[af], 1, horz_size * vert_size / 4, dump_yuv);
+	if(dump_yuv)
+	{
+		fwrite(yuv_y[af], 1, horz_size * vert_size, dump_yuv);
+		fwrite(yuv_cr[af], 1, horz_size * vert_size / 4, dump_yuv);
+		fwrite(yuv_cb[af], 1, horz_size * vert_size / 4, dump_yuv);
+	}
 	af = 1 - af;
 	return NULL;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// DC DCT 係数の初期化
+//
 static void reset_dc_dct_pred()
 {
 	dc_dct_pred[0] = dc_dct_pred[1] = dc_dct_pred[2] = (1 << (intra_dc_precision + 7));
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// スライス
+//
 static const char* slice()
 {
 	uint32_t n = bs_get(32);
@@ -603,6 +659,9 @@ static const char* slice()
 	return NULL;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// マクロブロック
+//
 static const char* macroblock()
 {
 	mb_addr_inc = 0;
@@ -655,35 +714,15 @@ static const char* macroblock()
 	{
 		// block decode
 		CALL(block(b));
-
-		// motion compensation
-		CALL(mc());
-	}
-
-	// output to yuv buffer
-	for(int y = 0; y < 16; ++y) for(int x = 0; x < 16; ++x)
-	{
-		int i = d[y][x] * 224 / 256 + 16;
-		CLIP_US255(i);
-		yuv_y[af][(mb_y * 16 + y) * horz_size + mb_x * 16 + x] = i;
-	}
-	for(int y = 0; y < 8; ++y)
-	{
-		for(int x = 0; x < 8; ++x)
-		{
-			int i = d[y + 16][x] * 219 / 256 + 16;
-			CLIP_US255(i);
-			yuv_cb[af][(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = i;
-			i = d[y + 16][x + 8] * 219 / 256 + 16;
-			CLIP_US255(i);
-			yuv_cr[af][(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = i;
-		}
 	}
 
 	++nmb;
 	return NULL;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// マクロブロックモードのデコード
+//
 static const char* macroblock_modes()
 {
 	if(seq_scalable) return "scalable is not supported!"; // TODO: scalable
@@ -745,6 +784,9 @@ static const char* macroblock_modes()
 	return NULL;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// マクロブロックの動きベクトルデコード
+//
 static const char* motion_vectors(int s)
 {
 	if(mv_count == 1)
@@ -781,6 +823,9 @@ static const char* motion_vector(int r, int s)
 	return NULL;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// CBP (コードブロックパターン) のデコード
+//
 static const char* coded_block_pattern()
 {
 	printf("cbp420: %d\n", cbp420 = bs_vlc(vlc_table_b9));
@@ -806,6 +851,9 @@ static const char* coded_block_pattern()
 	return NULL;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// 小ブロックの処理
+//
 static const char* block(int b)
 {
 	printf("---- BLOCK (S:%04d, M:%04d, B:%d) ----\n", nslice, nmb, b);
@@ -819,9 +867,18 @@ static const char* block(int b)
 	// inverse DCT
 	if(pattern_code[b]) CALL(idct(b));
 
+	// motion compensation
+	CALL(mc(b));
+
+	// output yuv
+	CALL(output_yuv(b));
+
 	return NULL;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// RL 係数列のデコード
+//
 static const char* block_coefs(int b)
 {
 	if(!pattern_code[b])
@@ -947,6 +1004,9 @@ static const char* block_coefs(int b)
 	return NULL;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// 逆量子化
+//
 const char* dequant(int b)
 {
 	// F[v][u] = ((2×QF[v][u]+k)×W[w][v][u]×quant_scale)/32
@@ -1005,16 +1065,17 @@ const char* dequant(int b)
 	return NULL;
 }
 
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// IDCT
+//
 const char* idct(int b)
 {
 	//           2  N-1 N-1                    (2x+1)uπ     (2y+1)vπ
 	// f(x,y) = --- Σ  Σ  C(u)C(v)F(u,v) cos --------- cos ---------
 	//           N  u=0 v=0                        2N            2N
 	// (N=8)
-	int oy = (b & ~1) << 2;
-	int ox = (b & 1) << 3;
 
-// /*
+/*
 	// /-*
 	for(int y = 0; y < 8; ++y) for(int x = 0; x < 8; ++x)
 	{
@@ -1038,7 +1099,7 @@ const char* idct(int b)
 	// extern void simple_idct(int L[8][8], int S[8][8]);
 	// simple_idct(F, f);
 
-// /*
+/*
 	dump(dump_sf, NULL, "# slice %6d, mb %4d, block %d",
 		nslice, nmb, b);
 	for(int y = 0; y < 8; ++y)
@@ -1062,10 +1123,10 @@ const char* idct(int b)
 		nslice, nmb, b);
 	for(int y = 0; y < 8; ++y)
 		dump(dump_sf2, NULL, " %4d %4d %4d %4d %4d %4d %4d %4d",
-			f[y+oy][0+ox] = f2[y][0], f[y+oy][1+ox] = f2[y][1],
-			f[y+oy][2+ox] = f2[y][2], f[y+oy][3+ox] = f2[y][3],
-			f[y+oy][4+ox] = f2[y][4], f[y+oy][5+ox] = f2[y][5],
-			f[y+oy][6+ox] = f2[y][6], f[y+oy][7+ox] = f2[y][7]);
+			f[y][0] = f2[y][0], f[y][1] = f2[y][1],
+			f[y][2] = f2[y][2], f[y][3] = f2[y][3],
+			f[y][4] = f2[y][4], f[y][5] = f2[y][5],
+			f[y][6] = f2[y][6], f[y][7] = f2[y][7]);
 // */
 	return NULL;
 }
@@ -1076,12 +1137,39 @@ static int iabs(int x)
 	return x;
 }
 
-const char* mc()
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// 動き補償
+//
+const char* mc(int b)
 {
+/*
+	p.104 vectorの数
+	r : マクロブロック中でいくつめか、ということらしいが
+	    要するに16x8とか使わない場合は無視していいのか？
+	s : 予測方向(0:forward,1:backward)
+	t : 座標方向(0:水平,1:垂直)
+
+	予測の種類
+	通常予測: 16x16 の MB 単位で予測
+	半MB予測: 16x8 の単位で予測。仕様書ではfield pictureについてしか触れていないので
+	          対応しない。
+	DualPrime: フルサイズのvector１つ＋差分小のvector３つ、計4つのvectorから
+	           予測する。frame picturesでも使えるらしいが、あくまでfield予測用である。
+			   ので、やっぱり対応いらない？
+
+*/
 	if(mb_intra)
 	{
-		for(int y = CHROMA_FMT_MBH[chroma_fmt] - 1; y >= 0; --y) for(int x = 0; x < 16; ++x)
-			d[y][x] = f[y][x];
+		// イントラの場合
+		memset(p[b], 0, sizeof(p[b]));
+		// for(int y = 0; y < 8; ++y) for(int x = 0; x < 8; ++x)
+		// 	d[b][y][x] = f[b][y][x];
+
+		if(b == 0 && !conceal_mv)
+		{
+			// PMVのゼロクリア
+			memset(PMV, 0, sizeof(PMV));
+		}
 		return NULL;
 	}
 
@@ -1131,6 +1219,7 @@ const char* mc()
 
 	}
 
+	return NULL;
 	if(mb_mo_bw) return "backward is not supported";
 	if(!mb_mo_fw)
 	{
@@ -1213,6 +1302,29 @@ const char* mc()
 
 			d[by][bx] = f[by][bx] + p[by][bx];
 		}
+	}
+
+	return NULL;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+// YUV バッファへの出力
+//
+static const char* output_yuv(int b)
+{
+	int bx = (b < 4) ? (mb_x * 16 + (b & 1) * 8) : (mb_x * 8);
+	int by = (b < 4) ? (mb_y * 16 + (b & 2) * 4) : (mb_y * 8);
+	int i;
+
+	for(int y = 0; y < 8; ++y) for(int x = 0; x < 8; ++x)
+	{
+		d[y][x] = f[y][x] + p[y][x];
+		if(b < 4) i = d[y][x] * 224 / 256 + 16;
+		else      i = d[y][x] * 219 / 256 + 16;
+		CLIP_US255(i);
+		if(b < 4)		YUV_Y (af, by + y, bx + x) = i;
+		else if(b == 5)	YUV_CB(af, by + y, bx + x) = i;
+		else			YUV_CR(af, by + y, bx + x) = i;
 	}
 
 	return NULL;

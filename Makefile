@@ -10,7 +10,7 @@ TEST = gs_m2v el_m2v sd_m2v
 SOURCES = main.c ps.c bitstream.c video.c vlc.c dump.c simple_idct.c ffmpeg_idct.c idct_hw.c
 
 CC = gcc
-CFLAGS = -Wall -std=c99 -lm
+CFLAGS = -Wall -std=c99 -lm -g
 
 OBJS = $(SOURCES:.c=.o)
 
