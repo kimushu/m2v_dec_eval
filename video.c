@@ -90,7 +90,8 @@ int dct_dc_diff, dc_dct_pred[3];
 int QFS[64], QF[8][8], F[8][8];
 
 // yuv out buffer
-uint8_t *yuv_y, *yuv_cb, *yuv_cr;
+int af;
+uint8_t *yuv_y[2], *yuv_cb[2], *yuv_cr[2];
 
 // macroblock data
 //
@@ -213,10 +214,13 @@ const char* decode_video(const char* ref_dir, int slices, int skips)
 	while(n != SEQ_END_CODE);
 	bs_get(32);
 	dump_finish();
-	if(yuv_y) free(yuv_y);
-	if(yuv_cb) free(yuv_cb);
-	if(yuv_cr) free(yuv_cr);
-	yuv_y = yuv_cb = yuv_cr = NULL;
+	if(yuv_y[0]) free(yuv_y[0]);
+	if(yuv_y[1]) free(yuv_y[1]);
+	if(yuv_cb[0]) free(yuv_cb[0]);
+	if(yuv_cb[1]) free(yuv_cb[1]);
+	if(yuv_cr[0]) free(yuv_cr[0]);
+	if(yuv_cr[1]) free(yuv_cr[1]);
+	yuv_y[0] = yuv_y[1] = yuv_cb[0] = yuv_cb[1] = yuv_cr[0] = yuv_cr[1] = NULL;
 	return NULL;
 }
 
@@ -233,12 +237,19 @@ static const char* sequence_header()
 	mb_height = (vert_size + 15) / 16;
 	vert_bufsize = mb_height * 16;
 
-	if(yuv_y) free(yuv_y);
-	yuv_y = (uint8_t*)malloc(horz_size * vert_bufsize);
-	if(yuv_cb) free(yuv_cb);
-	yuv_cb = (uint8_t*)malloc(horz_size * vert_bufsize / 4);
-	if(yuv_cr) free(yuv_cr);
-	yuv_cr = (uint8_t*)malloc(horz_size * vert_bufsize / 4);
+	if(yuv_y[0]) free(yuv_y[0]);
+	yuv_y[0] = (uint8_t*)malloc(horz_size * vert_bufsize);
+	if(yuv_y[1]) free(yuv_y[1]);
+	yuv_y[1] = (uint8_t*)malloc(horz_size * vert_bufsize);
+	if(yuv_cb[0]) free(yuv_cb[0]);
+	yuv_cb[0] = (uint8_t*)malloc(horz_size * vert_bufsize / 4);
+	if(yuv_cb[1]) free(yuv_cb[1]);
+	yuv_cb[1] = (uint8_t*)malloc(horz_size * vert_bufsize / 4);
+	if(yuv_cr[0]) free(yuv_cr[0]);
+	yuv_cr[0] = (uint8_t*)malloc(horz_size * vert_bufsize / 4);
+	if(yuv_cr[1]) free(yuv_cr[1]);
+	yuv_cr[1] = (uint8_t*)malloc(horz_size * vert_bufsize / 4);
+	af = 0;
 
 	printf("mb: %d x %d (%d MBs)\n", mb_width, mb_height, mb_width * mb_height);
 	printf("aspect_ratio: %u\n", aspect_ratio = bs_gets(4));
@@ -497,9 +508,9 @@ static const char* picture_coding_extension()
 static const char* picture_data()
 {
 	uint32_t n;
-	memset(yuv_y, 16, horz_size * vert_size);
-	memset(yuv_cb, 128, horz_size * vert_size / 4);
-	memset(yuv_cr, 128, horz_size * vert_size / 4);
+	// memset(yuv_y, 16, horz_size * vert_size);
+	// memset(yuv_cb, 128, horz_size * vert_size / 4);
+	// memset(yuv_cr, 128, horz_size * vert_size / 4);
 	do
 	{
 		CALL(slice());
@@ -507,9 +518,10 @@ static const char* picture_data()
 		n = bs_peek(32);
 	}
 	while(0x00000101 <= n && n <= 0x000001af);
-	fwrite(yuv_y, 1, horz_size * vert_size, dump_yuv);
-	fwrite(yuv_cb, 1, horz_size * vert_size / 4, dump_yuv);
-	fwrite(yuv_cr, 1, horz_size * vert_size / 4, dump_yuv);
+	fwrite(yuv_y[af], 1, horz_size * vert_size, dump_yuv);
+	fwrite(yuv_cb[af], 1, horz_size * vert_size / 4, dump_yuv);
+	fwrite(yuv_cr[af], 1, horz_size * vert_size / 4, dump_yuv);
+	af = 1 - af;
 	return NULL;
 }
 
@@ -651,14 +663,20 @@ static const char* macroblock()
 	// output to yuv buffer
 	for(int y = 0; y < 16; ++y) for(int x = 0; x < 16; ++x)
 	{
-		yuv_y[(mb_y * 16 + y) * horz_size + mb_x * 16 + x] = d[y][x];
+		int i = d[y][x] * 224 / 256 + 16;
+		CLIP_US255(i);
+		yuv_y[af][(mb_y * 16 + y) * horz_size + mb_x * 16 + x] = i;
 	}
 	for(int y = 0; y < 8; ++y)
 	{
 		for(int x = 0; x < 8; ++x)
 		{
-			yuv_cb[(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = d[y + 16][x];
-			yuv_cr[(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = d[y + 16][x + 8];
+			int i = d[y + 16][x] * 219 / 256 + 16;
+			CLIP_US255(i);
+			yuv_cb[af][(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = i;
+			i = d[y + 16][x + 8] * 219 / 256 + 16;
+			CLIP_US255(i);
+			yuv_cr[af][(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = i;
 		}
 	}
 
@@ -1062,23 +1080,8 @@ const char* mc()
 {
 	if(mb_intra)
 	{
-		// saturation だけ行う
-		for(int y = CHROMA_FMT_MBH[chroma_fmt] - 1; y >= 16; --y) for(int x = 0; x < 16; ++x)
-		{
-			int i = f[y][x] * 224 / 256 + 16;
-			// if(i < 16) i = 16;
-			// if(i > 240) i = 240;
-			CLIP_US255(i);
-			d[y][x] = i;
-		}
-		for(int y = 0; y < 16; ++y) for(int x = 0; x < 16; ++x)
-		{
-			int i = f[y][x] * 219 / 256 + 16;
-			// if(i < 16) i = 16;
-			// if(i > 235) i = 235;
-			CLIP_US255(i);
-			d[y][x] = i;
-		}
+		for(int y = CHROMA_FMT_MBH[chroma_fmt] - 1; y >= 0; --y) for(int x = 0; x < 16; ++x)
+			d[y][x] = f[y][x];
 		return NULL;
 	}
 
@@ -1126,6 +1129,90 @@ const char* mc()
 			return "mv_error";
 		}
 
+	}
+
+	if(mb_mo_bw) return "backward is not supported";
+	if(!mb_mo_fw)
+	{
+		printf("no mb_mo_fw\n");
+		return NULL;
+	}
+
+	for(int b = 0; b < BLK_COUNT[chroma_fmt]; ++b)
+	{
+		int int_vec[2], half_flag[2];
+		for(int i = 0; i < 2; ++i)
+		{
+			int v = vector[0][0][i];
+			if(b >= 4) v /= 2;
+			half_flag[i] = v & 1;
+			int_vec[i] = (v & ~1) / 2;
+		}
+
+		uint8_t* ref = yuv_y[1 - af];
+		int hs = horz_size, ms = 16;
+		int bxs = 0;
+		int bys = 0;
+		if(b == 4)
+		{
+			ref = yuv_cb[1 - af];
+			hs /= 2;
+			ms /= 2;
+			bys = 16;
+		}
+		else if(b == 5)
+		{
+			ref = yuv_cr[1 - af];
+			hs /= 2;
+			ms /= 2;
+			bxs = 8;
+			bys = 16;
+		}
+
+		// yuv_y[af][(mb_y * 16 + y) * horz_size + mb_x * 16 + x] = i;
+		// yuv_cb[af][(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = i;
+		// yuv_cr[af][(mb_y * 8 + y) * horz_size / 2 + mb_x * 8 + x] = i;
+		for(int y = 0, by = bys; y < ms; ++y, ++by) for(int x = 0, bx = bxs; x < ms; ++x, ++bx)
+		{
+			printf("int_vec[0] = %d, int_vec[1] = %d\n", int_vec[0], int_vec[1]);
+			if(!half_flag[0] && !half_flag[1])
+			{
+				// 整数精度のみ
+				p[by][bx] = ref[(mb_y * ms + y + int_vec[1]) * hs
+								+ mb_x * ms + x + int_vec[0]];
+			}/*
+			else if(!half_flag[0] && half_flag[1])
+			{
+				// 垂直方向だけ半画素精度
+				p[by][bx] = ((int)ref[(mb_y * ms + y + int_vec[1]) * hs
+								+ mb_x * ms + x + int_vec[0]]
+							+ (int)ref[(mb_y * ms + y + int_vec[1] + 1) * hs
+								+ mb_x * ms + x + int_vec[0]] + 1) / 2;
+			}
+			else if(half_flag[0] && !half_flag[1])
+			{
+				// 水平方向だけ半画素精度
+				p[by][bx] = ((int)ref[(mb_y * ms + y + int_vec[1]) * hs
+								+ mb_x * ms + x + int_vec[0]]
+							+ (int)ref[(mb_y * ms + y + int_vec[1]) * hs
+								+ mb_x * ms + x + int_vec[0] + 1] + 1) / 2;
+			}
+			else
+			{
+				// 水平垂直ともに半画素精度
+				p[by][bx] = ((int)ref[(mb_y * ms + y + int_vec[1]) * hs
+								+ mb_x * ms + x + int_vec[0]]
+							+ (int)ref[(mb_y * ms + y + int_vec[1] + 1) * hs
+								+ mb_x * ms + x + int_vec[0]]
+							+ (int)ref[(mb_y * ms + y + int_vec[1]) * hs
+								+ mb_x * ms + x + int_vec[0] + 1]
+							+ (int)ref[(mb_y * ms + y + int_vec[1] + 1) * hs
+								+ mb_x * ms + x + int_vec[0] + 1] + 2) / 4;
+			}
+			*/
+
+			d[by][bx] = f[by][bx] + p[by][bx];
+		}
 	}
 
 	return NULL;
