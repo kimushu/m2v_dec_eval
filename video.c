@@ -480,7 +480,7 @@ static const char* group_of_pictures_header()
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
-// ピクチャヘッダの取得 (I,P,B の種別や f_code などが重要)
+// ピクチャヘッダの取得 (I,P,(B) の種別が重要)
 //
 static const char* picture_header()
 {
@@ -490,16 +490,22 @@ static const char* picture_header()
 	printf("temp_ref: %u\n", temp_ref = bs_get(10));
 	pic_coding_type = bs_gets(3);
 	printf("pic_coding_type: %d (%c)\n", pic_coding_type, PCT_STRING[pic_coding_type]);
+	if(pic_coding_type != 1 && pic_coding_type != 2)
+		return "only I or P frame are supported!";
 	printf("vbv_delay: %u\n", bs_get(16));
 	if(pic_coding_type == 2 || pic_coding_type == 3)
 	{
 		printf("full_pel_fw_vector: %d\n", full_pel_fw_vector = bs_gets(1));
 		printf("fw_f_code: %d\n", fw_f_code = bs_gets(3));
+		if(full_pel_fw_vector != 0 || fw_f_code != 7)
+			return "illegal full_pel_fw or fw_f_code in MPEG2";
 	}
 	if(pic_coding_type == 3)
 	{
 		printf("full_pel_bw_vector: %d\n", full_pel_bw_vector = bs_gets(1));
 		printf("bw_f_code: %d\n", bw_f_code = bs_gets(3));
+		if(full_pel_bw_vector != 0 || bw_f_code != 7)
+			return "illegal full_pel_bw or bw_f_code in MPEG2";
 	}
 	int ei = 0;
 	while(bs_gets(1) == 0b1)
@@ -531,6 +537,8 @@ static const char* picture_coding_extension()
 	f_code[1][1] = bs_gets(4);
 	printf("f_code: {{%u, %u}, {%u, %u}}\n",
 		f_code[0][0], f_code[0][1], f_code[1][0], f_code[1][1]);
+	if(f_code[1][0] != 15 || f_code[1][1] != 15)
+		return "PCE: backward vector is not supported";
 	printf("intra_dc_precision: %u\n", intra_dc_precision = bs_gets(2));
 	printf("picture_struct: %u\n", picture_struct = bs_gets(2));
 	printf("top_field_first: %u\n", top_field_first = bs_gets(1));
@@ -539,6 +547,7 @@ static const char* picture_coding_extension()
 	printf("q_scale_type: %u\n", q_scale_type = bs_gets(1));
 	printf("intra_vlc_fmt: %u\n", intra_vlc_fmt = bs_gets(1));
 	printf("alt_scan: %u\n", alt_scan = bs_gets(1));
+	if(alt_scan) return "PCE: alt_scan must be zero";
 	printf("rep_first_field: %u\n", rep_first_field = bs_gets(1));
 	printf("chroma_420_type: %u\n", chroma_420_type = bs_gets(1));
 	printf("prog_frame: %u\n", prog_frame = bs_gets(1));
@@ -706,19 +715,26 @@ static const char* macroblock()
 	printf("mb_addr: (%d, %d)\n", mb_x, mb_y);
 	if(mb_addr_inc > 1) reset_dc_dct_pred();
 	dump(dump_mb, NULL, "# slice %6d, mb %4d", nslice, nmb);
-	dump(dump_mb, "mb_x mb_y mb_addr_inc", " %3d %3d %2d", mb_x, mb_y, mb_addr_inc);
-	dump(dump_mb, "bytepos bitpos", "0x%x %d", g_total_bits / 8, g_total_bits % 8);
+	dump(dump_mb, "mb_x mb_y mb_addr_inc", " %2d %2d %2d", mb_x, mb_y, mb_addr_inc);
+	// dump(dump_mb, "bytepos bitpos", "0x%x %d", g_total_bits / 8, g_total_bits % 8);
 	CALL(macroblock_modes());
+	dump(dump_mb, "quant fw pat intra", " %d %d %d %d", mb_quant, mb_mo_fw,mb_pattern, mb_intra);
 	if(mb_quant) printf("mb_q_scale_code: %d\n", mb_q_scale_code = bs_gets(5));
 	else mb_q_scale_code = q_scale_code;
 	if(mb_mo_fw || (mb_intra && conceal_mv)) CALL(motion_vectors(0));
-	if(mb_mo_bw) CALL(motion_vectors(1));
+	// if(mb_mo_bw) CALL(motion_vectors(1));
+	if(mb_mo_bw) return "backward vector is not supported!";
 	if(mb_intra && conceal_mv && bs_gets(1) != 0b1)
 		return "illegal marker-bit (mb)";
 	if((mb_intra && !conceal_mv) || (!mb_intra && !mb_mo_fw && pic_coding_type == 2))
 		memset(PMV, 0, sizeof(PMV));
 	for(int i = 0; i < 12; ++i) pattern_code[i] = mb_intra;
 	if(mb_pattern) CALL(coded_block_pattern());
+	dump(dump_mb, "pat[0-5]", " %d %d %d %d %d %d",
+		pattern_code[0], pattern_code[1], pattern_code[2],
+		pattern_code[3], pattern_code[4], pattern_code[5]);
+	dump(dump_mb, "fw_mv[h,v]", " %3d %3d", vector[0][0][0], vector[0][0][1]);
+	dump(dump_mb, "PMV[h,v]", " %3d %3d", PMV[0][0][0], PMV[0][0][1]);
 
 	dump(dump_rl, NULL, "# slice %6d, mb %4d", nslice, nmb);
 	dump(dump_rl, "qs_type qs_code intra", " %d %2d %d",
@@ -919,14 +935,18 @@ static const char* block(int b)
 {
 	printf("---- BLOCK (S:%04d, M:%04d, B:%d) ----\n", nslice, nmb, b);
 
-	// load coefficients
-	CALL(block_coefs(b));
+	if(pattern_code[b])
+	{
+		// load coefficients
+		CALL(block_coefs(b));
 
-	// dequantisation
-	CALL(dequant(b));
+		// dequantisation
+		CALL(dequant(b));
 
-	// inverse DCT
-	if(pattern_code[b]) CALL(idct(b));
+		// inverse DCT
+		if(pattern_code[b]) CALL(idct(b));
+	}
+	else memset(f, 0, sizeof(f));
 
 	// motion compensation
 	CALL(mc(b));
@@ -1224,11 +1244,12 @@ const char* mc(int b)
 	}
 
 	if(mb_mo_bw) return "backward is not supported";
-	// if(!mb_mo_fw)
-	// {
-	// 	// fprintf(stderr, "no mb_mo_fw\n");
-	// 	return NULL;
-	// }
+	if(!mb_mo_fw)
+	{
+		// fprintf(stderr, "no mb_mo_fw\n");
+		// return NULL;
+		vector[0][0][0] = vector[0][0][1] = 0;
+	}
 
 	int ivx, ivy, halfx, halfy;
 	ivx = vector[0][0][0];
@@ -1240,8 +1261,14 @@ const char* mc(int b)
 	halfy = ivy & 1;
 	ivy = (ivy & ~1) / 2;
 
+	dump(dump_mv, NULL, "# slice %6d, mb %4d, block %d",
+		nslice, nmb, b);
+	dump(dump_mv, "ivx halfx", " %3d %d", ivx, halfx);
+	dump(dump_mv, "ivy halfy", " %3d %d", ivy, halfy);
+
 	ivx += (b < 4) ? (mb_x * 16 + (b & 1) * 8) : (mb_x * 8);
 	ivy += (b < 4) ? (mb_y * 16 + (b & 2) * 4) : (mb_y * 8);
+	dump(dump_mv, "ox oy", " %3d %3d", ivx, ivy);
 
 	int rf = 1 - af;
 	int* buf = (b < 4) ? fr_buf[rf] : (b == 4) ? fr_u[rf] : fr_v[rf];
