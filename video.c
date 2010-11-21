@@ -4,6 +4,12 @@
 // $Id$
 //================================================================================
 
+#define USE_MPEG1				0
+#define USE_MPEG2				1
+#define USE_FIELD_PICTURE		0
+#define USE_FIELD_PREDICTION	0
+#define USE_B_FRAME				0
+
 #define _GNU_SOURCE
 #define _USE_MATH_DEFINES
 #include <stdio.h>
@@ -417,7 +423,7 @@ static const char* sequence_extension()
 		frame_rate_n, frame_rate_d);
 	bs_align(8);
 	n = bs_nextcode(0x000001, 3);
-	if(n > 0) printf("*** skipped (seqext) %d ***\n", n);
+	if(n > 0) fprintf(stderr, "*** skipped (seqext) %d ***\n", n);
 	return NULL;
 }
 
@@ -475,7 +481,7 @@ static const char* group_of_pictures_header()
 	printf("broken_link: %u\n", broken_link = bs_gets(1));
 	bs_align(8);
 	n = bs_nextcode(0x000001, 3);
-	if(n > 0) printf("**** skipped **** (gop) %d\n", n);
+	if(n > 0) fprintf(stderr, "**** skipped **** (gop) %d\n", n);
 	return NULL;
 }
 
@@ -517,7 +523,7 @@ static const char* picture_header()
 	if(ei) printf("\n");
 	bs_align(8);
 	n = bs_nextcode(0x000001, 3);
-	if(n > 0) printf("**** skipped **** (picheader) %d\n", n);
+	if(n > 0) fprintf(stderr, "**** skipped **** (picheader) %d\n", n);
 	++npict;
 	return NULL;
 }
@@ -561,7 +567,7 @@ static const char* picture_coding_extension()
 	}
 	bs_align(8);
 	n = bs_nextcode(0x000001, 3);
-	if(n > 0) printf("**** skipped **** (pce) %d\n", n);
+	if(n > 0) fprintf(stderr, "**** skipped **** (pce) %d\n", n);
 	return NULL;
 }
 
@@ -670,10 +676,10 @@ static const char* slice()
 		if(r) break;
 	}
 	while(bs_peek(23) != 0);
-	if(r) printf("*** slice is skipeed because of error: %s ***\n", r);
+	if(r) fprintf(stderr, "*** slice is skipeed because of error: %s ***\n", r);
 	bs_align(8);
 	n = bs_nextcode(0x000001, 3);
-	if(n > 0) printf("*** skipped *** %u\n", n);
+	if(n > 0) fprintf(stderr, "*** skipped *** %u\n", n);
 	++nslice;
 	return NULL;
 }
@@ -710,11 +716,11 @@ static const char* macroblock()
 	mb_x = prev_mb_addr % mb_width;
 	mb_y = prev_mb_addr / mb_width + slice_vert_position;
 
-	printf("---- MACROBLOCK (S:%05d, M:%04d) ----\n", nslice, nmb);
+	printf("---- MACROBLOCK (P:%5d, S:%05d, M:%04d) ----\n", npict, nslice, nmb);
 	printf("mb_addr_inc: %d\n", mb_addr_inc);
 	printf("mb_addr: (%d, %d)\n", mb_x, mb_y);
 	if(mb_addr_inc > 1) reset_dc_dct_pred();
-	dump(dump_mb, NULL, "# slice %6d, mb %4d", nslice, nmb);
+	dump(dump_mb, NULL, "# pict %5d, slice %6d, mb %4d", npict, nslice, nmb);
 	dump(dump_mb, "mb_x mb_y mb_addr_inc", " %2d %2d %2d", mb_x, mb_y, mb_addr_inc);
 	// dump(dump_mb, "bytepos bitpos", "0x%x %d", g_total_bits / 8, g_total_bits % 8);
 	CALL(macroblock_modes());
@@ -736,7 +742,7 @@ static const char* macroblock()
 	dump(dump_mb, "fw_mv[h,v]", " %3d %3d", vector[0][0][0], vector[0][0][1]);
 	dump(dump_mb, "PMV[h,v]", " %3d %3d", PMV[0][0][0], PMV[0][0][1]);
 
-	dump(dump_rl, NULL, "# slice %6d, mb %4d", nslice, nmb);
+	dump(dump_rl, NULL, "# pict %5d, slice %6d, mb %4d", npict, nslice, nmb);
 	dump(dump_rl, "qs_type qs_code intra", " %d %2d %d",
 		q_scale_type, mb_q_scale_code, mb_intra);
 
@@ -819,6 +825,7 @@ static const char* macroblock_modes()
 //
 static const char* motion_vectors(int s)
 {
+	if(s != 0) return "s is not zero";
 	if(mv_count == 1)
 	{
 		if(mv_format == MV_FORMAT_FIELD && dmv != 1)
@@ -841,7 +848,7 @@ static const char* motion_vectors(int s)
 				delta = mo_code[r][s][t];
 			else
 			{
-				delta = (iabs(mo_code[r][s][t] - 1) * f) + mo_residual[r][s][t] + 1;
+				delta = ((iabs(mo_code[r][s][t]) - 1) * f) + mo_residual[r][s][t] + 1;
 				if(mo_code[r][s][t] < 0) delta = -delta;
 			}
 
@@ -933,7 +940,7 @@ static const char* coded_block_pattern()
 //
 static const char* block(int b)
 {
-	printf("---- BLOCK (S:%04d, M:%04d, B:%d) ----\n", nslice, nmb, b);
+	printf("---- BLOCK (P:%4d, S:%04d, M:%04d, B:%d) ----\n", npict, nslice, nmb, b);
 
 	if(pattern_code[b])
 	{
@@ -968,7 +975,8 @@ static const char* block_coefs(int b)
 		return NULL;
 	}
 
-	dump(dump_rl, NULL, "# slice %6d, mb %4d, block %2d", nslice, nmb, b);
+	dump(dump_rl, NULL, "# pict %5d, slice %6d, mb %4d, block %2d, mb(%2d,%2d)",
+		npict, nslice, nmb, b, mb_x, mb_y);
 
 	int i;
 	const VLC_ENTRY* table_dct =
@@ -1062,7 +1070,7 @@ static const char* block_coefs(int b)
 	}
 	dump(dump_rl, "eob", " %2d %5d", 0, 0);
 	printf("QFS last: %d\n", i);
-	dump(dump_qfs, NULL, "# slice %6d, mb %4d, block %2d", nslice, nmb, b);
+	dump(dump_qfs, NULL, "# pict %5d, slice %6d, mb %4d, block %2d", npict, nslice, nmb, b);
 	for(int j = 0; j <= (64 - 16); j += 16)
 	{
 		dump(dump_qfs, NULL, " %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d %5d",
@@ -1073,7 +1081,7 @@ static const char* block_coefs(int b)
 	}
 
 	// inverse scan
-	dump(dump_qf, NULL, "# slice %6d, mb %4d, block %2d", nslice, nmb, b);
+	dump(dump_qf, NULL, "# pict %5d, slice %6d, mb %4d, block %2d", npict, nslice, nmb, b);
 	for(int v = 0; v < 8; ++v)
 	{
 		for(int u = 0; u < 8; ++u) QF[v][u] = QFS[ZIGZAG_SCAN[alt_scan][v][u]];
@@ -1121,7 +1129,7 @@ const char* dequant(int b)
 		}
 	}
 
-	dump(dump_lf, NULL, "# slice %6d, mb %4d, block %2d, qs %2d", nslice, nmb, b, qs);
+	dump(dump_lf, NULL, "# pict %5d, slice %6d, mb %4d, block %2d, qs %2d", npict, nslice, nmb, b, qs);
 
 	// clipping & mismatch control
 	int sum = 0;		// RTL実装時は足す必要がなく、LSBだけ見ていればよい
@@ -1181,8 +1189,8 @@ const char* idct(int b)
 	// simple_idct(F, f);
 
 /*
-	dump(dump_sf, NULL, "# slice %6d, mb %4d, block %d",
-		nslice, nmb, b);
+	dump(dump_sf, NULL, "# pict %5d, slice %6d, mb %4d, block %d",
+		npict, nslice, nmb, b);
 	for(int y = 0; y < 8; ++y)
 		dump(dump_sf, NULL, " %4d %4d %4d %4d %4d %4d %4d %4d",
 			f[y+oy][0+ox], f[y+oy][1+ox], f[y+oy][2+ox], f[y+oy][3+ox],
@@ -1195,13 +1203,13 @@ const char* idct(int b)
 	for(int i = 0; i < 64; ++i) f2[0][i] = F[0][i];
 	// memcpy(f2, F, sizeof(f2));
 	// ff_simple_idct((int*)f2);
-	dump(dump_idwb, NULL, "# slice %6d, mb %4d, block %d",
-		nslice, nmb, b);
+	dump(dump_idwb, NULL, "# pict %5d, slice %6d, mb %4d, block %d",
+		npict, nslice, nmb, b);
 	idct_hw((short*)f2);
 	for(int y = 0; y < 8; ++y) for(int x = 0; x < 8; ++x) CLIP_S256(f2[y][x]);
 
-	dump(dump_sf2, NULL, "# slice %6d, mb %4d, block %d",
-		nslice, nmb, b);
+	dump(dump_sf2, NULL, "# pict %5d, slice %6d, mb %4d, block %d",
+		npict, nslice, nmb, b);
 	for(int y = 0; y < 8; ++y)
 		dump(dump_sf2, NULL, " %4d %4d %4d %4d %4d %4d %4d %4d",
 			f[y][0] = f2[y][0], f[y][1] = f2[y][1],
@@ -1251,6 +1259,7 @@ const char* mc(int b)
 		vector[0][0][0] = vector[0][0][1] = 0;
 	}
 
+	// return NULL;
 	int ivx, ivy, halfx, halfy;
 	ivx = vector[0][0][0];
 	if(b >= 4) ivx /= 2;
@@ -1261,13 +1270,26 @@ const char* mc(int b)
 	halfy = ivy & 1;
 	ivy = (ivy & ~1) / 2;
 
-	dump(dump_mv, NULL, "# slice %6d, mb %4d, block %d",
-		nslice, nmb, b);
+	dump(dump_mv, NULL, "# pict %5d, slice %6d, mb %4d, block %d",
+		npict, nslice, nmb, b);
 	dump(dump_mv, "ivx halfx", " %3d %d", ivx, halfx);
 	dump(dump_mv, "ivy halfy", " %3d %d", ivy, halfy);
 
 	ivx += (b < 4) ? (mb_x * 16 + (b & 1) * 8) : (mb_x * 8);
 	ivy += (b < 4) ? (mb_y * 16 + (b & 2) * 4) : (mb_y * 8);
+	// /*
+	if(b < 4 && (ivx < 0 || ivy < 0 || ivx >= buf_width || ivy >= buf_height))
+	{
+		fprintf(stderr, "oor: %d, %d, %d, %d\n", ivx, ivy, mb_x, mb_y);
+		return "MC out of range (luma)";
+	}
+	if(b >= 4 && (ivx < 0 || ivy < 0 || ivx >= buf_width / 2 || ivy >= buf_height / 2))
+		return "MC out of range (chroma)";
+	//-*/
+	// while(ivx < 0) ivx += 16;
+	// while(ivx >= buf_width) ivx -= 16;
+	// while(ivy < 0) ivy += 16;
+	// while(ivy >= buf_height) ivy -= 16;
 	dump(dump_mv, "ox oy", " %3d %3d", ivx, ivy);
 
 	int rf = 1 - af;

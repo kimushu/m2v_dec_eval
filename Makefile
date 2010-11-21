@@ -5,10 +5,10 @@
 
 TARGET = m2vdec
 
-# TEST = gs_m2v el_m2v sd_m2v
-TEST = gs_m2v
+TEST = gs_m2v el_m2v sd_m2v
+# TEST ?= gs_m2v
 
-SOURCES = main.c ps.c bitstream.c video.c vlc.c dump.c simple_idct.c ffmpeg_idct.c idct_hw.c
+SOURCES = main.c ps.c bitstream.c video.c vlc.c dump.c ffmpeg_idct.c idct_hw.c
 
 CC = gcc
 CFLAGS = -Wall -std=c99 -lm -g
@@ -28,11 +28,8 @@ $(TARGET): $(OBJS)
 dump.c dump.h: dump.rb
 	ruby $<
 
-simple_idct.c: simple_idct.rb
-	ruby $< > $@
-
 clean:
-	@rm -f $(OBJS) $(TARGET) dump.{c,h} simple_idct.c
+	@rm -f $(OBJS) $(TARGET) dump.{c,h}
 
 .PHONY: test
 test: $(foreach t,$(TEST),ref_$(t).mpg.vs/mb.txt)
