@@ -344,3 +344,10 @@ static int picture_coding_extension(bitstream* bs)
 	return 1;
 }
 
+////////////////////////////////////////////////////////////////////////////////
+/// @brief ピクチャデータ(中身)のデコード
+///
+static int picture_data(bitstream* bs)
+{
+}
+
