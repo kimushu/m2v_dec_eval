@@ -8,10 +8,11 @@ TARGET = m2vdec
 TEST = gs_m2v el_m2v sd_m2v
 # TEST ?= gs_m2v
 
-SOURCES = main.c ps.c bitstream.c video.c vlc.c dump.c ffmpeg_idct.c idct_hw.c
+SOURCES = main.c ps.c bitstream.c video.c vlc.c dump.c ffmpeg_idct.c idct_hw.c \
+		bitdecoder.c
 
 CC = gcc
-CFLAGS = -Wall -std=c99 -lm -g
+CFLAGS = -Wall -std=gnu99 -lm -g
 
 OBJS = $(SOURCES:.c=.o)
 

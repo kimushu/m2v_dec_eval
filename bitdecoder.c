@@ -4,8 +4,10 @@
 // $Id$
 //================================================================================
 
-#include "m2v_dec.h"
+#include "m2v_dec_eval.h"
 #include "bitreader.h"
+#include <signal.h>
+#include <string.h>
 
 static void sigint_handler();
 static void next_header(bitstream* bs);
@@ -35,6 +37,36 @@ static int block(bitstream* bs, int b);
 
 static int stop_decode = 0;
 
+static const int ZIGZAG_SCAN[2][8][8] = {
+	{{ 0,  1,  5,  6, 14, 15, 27, 28 },
+	{  2,  4,  7, 13, 16, 26, 29, 42 },
+	{  3,  8, 12, 17, 25, 30, 41, 43 },
+	{  9, 11, 18, 24, 31, 40, 44, 53 },
+	{ 10, 19, 23, 32, 39, 45, 52, 54 },
+	{ 20, 22, 33, 38, 46, 51, 55, 60 },
+	{ 21, 34, 37, 47, 50, 56, 59, 61 },
+	{ 35, 36, 48, 49, 57, 58, 62, 63 }},
+	{{ 0,  4,  6, 20, 22, 36, 38, 52 },
+	{  1,  5,  7, 21, 23, 37, 39, 53 },
+	{  2,  8, 19, 24, 34, 40, 50, 54 },
+	{  3,  9, 18, 25, 35, 41, 51, 55 },
+	{ 10, 17, 26, 30, 42, 46, 56, 60 },
+	{ 11, 16, 27, 31, 43, 47, 57, 61 },
+	{ 12, 15, 28, 32, 44, 48, 58, 62 },
+	{ 13, 14, 29, 33, 45, 49, 59, 63 }},
+};
+
+static const int DEF_INTRA_QMAT[8][8] = {
+	{  8, 16, 19, 22, 26, 27, 29, 34 },
+	{ 16, 16, 22, 24, 27, 29, 34, 37 },
+	{ 19, 22, 26, 27, 29, 34, 34, 38 },
+	{ 22, 22, 26, 27, 29, 34, 37, 40 },
+	{ 22, 26, 27, 29, 32, 35, 40, 48 },
+	{ 26, 27, 29, 32, 35, 40, 48, 58 },
+	{ 26, 27, 29, 34, 38, 46, 56, 69 },
+	{ 27, 29, 35, 38, 46, 56, 69, 83 },
+};
+
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief ビットデコード実行
 ///
@@ -63,7 +95,7 @@ int bitdecode(bitstream* bs)
 			CALL(picture_coding_extension(bs));
 			CALL(extension_and_user_data(bs));
 			CALL(picture_data(bs));
-			n = bs_peek(32);
+			n = bs_peek(bs, 32);
 			if(stop_decode) break;
 		}
 		while(n == PICTURE_START_CODE || n == GROUP_START_CODE);
@@ -93,7 +125,7 @@ static void sigint_handler()
 /// バイト境界移動以外のジャンプが発生した場合(つまりゴミバイトがあった場合)
 /// エラー出力にメッセージを出力する。
 ///
-static void next_header()
+static void next_header(bitstream* bs)
 {
 	bs_align(bs, 8);
 	int i;
@@ -193,8 +225,8 @@ static int sequence_extension(bitstream* bs)
 	prof_and_level = bs_get(bs, 8);
 	printf("Profile: %s Profile %s Level\n",
 		profs[prof_and_level & 0x80 ? 0 : (prof_and_level >> 4) & 7],
-		levels[(profs_and_level & 0x80 || prof_and_level & 1) ? 0
-			: (profs_and_level >> 1) & 7]);
+		levels[(prof_and_level & 0x80 || prof_and_level & 1) ? 0
+			: (prof_and_level >> 1) & 7]);
 	prog_seq = bs_get(bs, 1);
 	if(!prog_seq)
 	{
@@ -218,7 +250,11 @@ static int sequence_extension(bitstream* bs)
 		printf("Bitrate (w/ext): %d\n", bitrate_value);
 	}
 	else bs_get(bs, 12);
-	if(!bs_get(bs, 1)) return BD_RET_ERROR;
+	if(!bs_get(bs, 1))
+	{
+		printf("Error: Illegal Marker Bit (in sequence_extension)\n");
+		return 0;
+	}
 	vbv_buf_size += (bs_get(bs, 8) << 10);
 	low_delay = bs_get(bs, 1);
 	if(bs_peek(bs, 7) != 0)
@@ -246,7 +282,7 @@ static int extension_and_user_data(bitstream* bs)
 	while(n == EXT_START_CODE || n == UDATA_START_CODE)
 	{
 		bs_get(bs, 32);
-		next_header();
+		next_header(bs);
 	}
 	return 1;
 }
@@ -263,9 +299,9 @@ static int gop_header(bitstream* bs)
 		printf("Error: Illegal GOP Header\n");
 		return 0;
 	}
-	time_code = bs_get(25);
-	closed_gop = bs_gets(1);
-	broken_link = bs_gets(1);
+	time_code = bs_get(bs, 25);
+	closed_gop = bs_get(bs, 1);
+	broken_link = bs_get(bs, 1);
 	bs_align(bs, 8);
 	return 1;
 }
