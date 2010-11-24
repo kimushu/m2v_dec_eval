@@ -83,6 +83,8 @@ int bitdecode(bitstream* bs)
 	{
 		CALL(sequence_header(bs));
 		next_header(bs);
+		CALL(sequence_extension(bs));
+		CALL(mc_allocbuffer(mb_wd, mb_ht));
 		CALL(extension_and_user_data(bs));
 		do
 		{
@@ -103,6 +105,7 @@ int bitdecode(bitstream* bs)
 	}
 	while(n != SEQ_END_CODE);
 
+	CALL(mc_allocbuffer(0, 0));
 	signal(SIGINT, SIG_DFL);
 	return 1;
 }
@@ -385,5 +388,8 @@ static int picture_coding_extension(bitstream* bs)
 ///
 static int picture_data(bitstream* bs)
 {
+	// バッファの切り替え
+	return 0;
 }
+
 
