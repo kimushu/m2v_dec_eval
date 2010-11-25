@@ -7,7 +7,7 @@
 
 // Macroblock addressing
 // checked (mpeg12data.c)
-const VLC_ENTRY vlc_table_b1[] =
+static const VLC_ENTRY vlc_entries_b1[] =
 {
 	{ 0b1,           1,  1  },
 	{ 0b011,         3,  2  },
@@ -49,7 +49,7 @@ const VLC_ENTRY vlc_table_b1[] =
 };
 
 // for I pictures
-const VLC_ENTRY vlc_table_b2[] =
+static const VLC_ENTRY vlc_entries_b2[] =
 {
 	//           +--------Quant
 	//           |+-------MoFw
@@ -66,7 +66,7 @@ const VLC_ENTRY vlc_table_b2[] =
 };
 
 // for P pictures
-const VLC_ENTRY vlc_table_b3[] =
+static const VLC_ENTRY vlc_entries_b3[] =
 {
 	//               +--------Quant
 	//               |+-------MoFw
@@ -88,7 +88,7 @@ const VLC_ENTRY vlc_table_b3[] =
 };
 
 // for B pictures
-const VLC_ENTRY vlc_table_b4[] =
+static const VLC_ENTRY vlc_entries_b4[] =
 {
 	//               +--------Quant
 	//               |+-------MoFw
@@ -114,20 +114,20 @@ const VLC_ENTRY vlc_table_b4[] =
 };
 
 // for I pictures with spatial scalability
-// const VLC_ENTRY vlc_table_b5[] =
+// static const VLC_ENTRY vlc_entries_b5[] =
 
 // for P pictures with spatial scalability
-// const VLC_ENTRY vlc_table_b6[] =
+// static const VLC_ENTRY vlc_entries_b6[] =
 
 // for B pictures with spatial scalability
-// const VLC_ENTRY vlc_table_b7[] =
+// static const VLC_ENTRY vlc_entries_b7[] =
 
 // for I,P,B pictures with SNR scalability
-// const VLC_ENTRY vlc_table_b8[] =
+// static const VLC_ENTRY vlc_entries_b8[] =
 
 // coded block pattern
 // checked (mpeg12data.c)
-const VLC_ENTRY vlc_table_b9[] =
+static const VLC_ENTRY vlc_entries_b9[] =
 {
 	{ 0b111,       3, 60 },
 	{ 0b1101,      4,  4 },
@@ -197,7 +197,7 @@ const VLC_ENTRY vlc_table_b9[] =
 };
 
 // motion_code
-const VLC_ENTRY vlc_table_b10[] =
+static const VLC_ENTRY vlc_entries_b10[] =
 {
 	{ 0b1,           1,   0  },
 	{ 0b011,         3,  -1  },
@@ -236,7 +236,7 @@ const VLC_ENTRY vlc_table_b10[] =
 };
 
 // for dmvector[t]
-const VLC_ENTRY vlc_table_b11[] =
+static const VLC_ENTRY vlc_entries_b11[] =
 {
 	{ 0b0,  1,  0 },
 	{ 0b11, 2, -1 },
@@ -246,7 +246,7 @@ const VLC_ENTRY vlc_table_b11[] =
 
 // dct_dc_size_luma
 // checked (mpeg12data.c)
-const VLC_ENTRY vlc_table_b12[] =
+static const VLC_ENTRY vlc_entries_b12[] =
 {
 	{ 0b00,        2, 1 },
 	{ 0b01,        2, 2 },
@@ -265,7 +265,7 @@ const VLC_ENTRY vlc_table_b12[] =
 
 // dct_dc_size_chroma
 // checked (mpeg12data.c)
-const VLC_ENTRY vlc_table_b13[] =
+static const VLC_ENTRY vlc_entries_b13[] =
 {
 	{ 0b00,         2, 0 },
 	{ 0b01,         2, 1 },
@@ -283,7 +283,7 @@ const VLC_ENTRY vlc_table_b13[] =
 };
 
 // checked (mpeg12data.c)
-const VLC_ENTRY vlc_table_b14[] =
+static const VLC_ENTRY vlc_entries_b14[] =
 {
 	{ 0b10,                2, -1 },
 	{ 0b11,                2, (0*256+1) },
@@ -402,7 +402,7 @@ const VLC_ENTRY vlc_table_b14[] =
 };
 
 // checked (mpeg12data.c)
-const VLC_ENTRY vlc_table_b15[] =
+STAtic const VLC_ENTRY vlc_entries_b15[] =
 {
 	{ 0b10,                2, (0*256+1) },
 	{ 0b010,               3, (1*256+1) },
@@ -520,4 +520,97 @@ const VLC_ENTRY vlc_table_b15[] =
 	{ 0, 0, 15 },
 };
 
+VLC_TABLE vlc_table_b1;
+VLC_TABLE vlc_table_b2;
+VLC_TABLE vlc_table_b3;
+VLC_TABLE vlc_table_b4;
+VLC_TABLE vlc_table_b9;
+VLC_TABLE vlc_table_b10;
+VLC_TABLE vlc_table_b11;
+VLC_TABLE vlc_table_b12;
+VLC_TABLE vlc_table_b13;
+VLC_TABLE vlc_table_b14;
+VLC_TABLE vlc_table_b15;
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief VLCデコード用のテーブルを作成する
+///
+/// エントリ列から、1発索引用の巨大テーブルを構築する。
+///
+static int vlc_make_table(VLC_TABLE* t, VLC_ENTRY* e)
+{
+	t->bits = 0;
+
+	// まず最長コード数を得る
+	for(int i = 0; e[i].clen; ++i) if(t->bits < e[i].clen) t->bits = e[i].clen;
+
+	int items = 1 << t->bits;
+
+	// メモリ確保
+	if(!(t->table = (int*)malloc(sizeof(int) * items * 2)))
+	{
+		printf("Error: Not enough memory (at vlc_make_table)\n");
+		return 0;
+	}
+
+	// とりあえずエラー(-99)で埋めとく TODO:INT_MINのほうが良くなイカ？
+	for(int i = 0; i < items; ++i)
+	{
+		t->table[i*2+0] = -99;
+		t->table[i*2+1] = 0;
+	}
+
+	// 一個ずつテーブルに書き込み
+	for(; e->clen; ++e)
+	{
+		int res_bits = t->bits - e->clen;
+		int code = e->code << res_bits;
+		for(int i = (1 << res_bits); i > 0; --i, ++code)
+		{
+			t->table[code*2+0] = e->value;
+			t->table[code*2+1] = e->clen;
+		}
+	}
+
+	return 1;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief VLCデコード用のテーブルを作成する
+///
+/// 各エントリ列について、テーブルの作成を行う
+///
+int vlc_init_table()
+{
+	if(!vlc_make_table(vlc_table_b1,  vlc_entries_b1 )) return 0;
+	if(!vlc_make_table(vlc_table_b2,  vlc_entries_b2 )) return 0;
+	if(!vlc_make_table(vlc_table_b3,  vlc_entries_b3 )) return 0;
+	if(!vlc_make_table(vlc_table_b4,  vlc_entries_b4 )) return 0;
+	if(!vlc_make_table(vlc_table_b9,  vlc_entries_b9 )) return 0;
+	if(!vlc_make_table(vlc_table_b10, vlc_entries_b10)) return 0;
+	if(!vlc_make_table(vlc_table_b11, vlc_entries_b11)) return 0;
+	if(!vlc_make_table(vlc_table_b12, vlc_entries_b12)) return 0;
+	if(!vlc_make_table(vlc_table_b13, vlc_entries_b13)) return 0;
+	if(!vlc_make_table(vlc_table_b14, vlc_entries_b14)) return 0;
+	if(!vlc_make_table(vlc_table_b15, vlc_entries_b15)) return 0;
+	return 1;
+}
+
+////////////////////////////////////////////////////////////////////////////////
+/// @brief VLCデコード用のテーブルを解放する
+///
+void vlc_free()
+{
+	free(vlc_table_b1.table);  vlc_table_b1.table = NULL;
+	free(vlc_table_b2.table);  vlc_table_b2.table = NULL;
+	free(vlc_table_b3.table);  vlc_table_b3.table = NULL;
+	free(vlc_table_b4.table);  vlc_table_b4.table = NULL;
+	free(vlc_table_b9.table);  vlc_table_b9.table = NULL;
+	free(vlc_table_b10.table); vlc_table_b10.table = NULL;
+	free(vlc_table_b11.table); vlc_table_b11.table = NULL;
+	free(vlc_table_b12.table); vlc_table_b12.table = NULL;
+	free(vlc_table_b13.table); vlc_table_b13.table = NULL;
+	free(vlc_table_b14.table); vlc_table_b14.table = NULL;
+	free(vlc_table_b15.table); vlc_table_b15.table = NULL;
+}
 
