@@ -1,0 +1,8 @@
+m2v_dec_eval - MPEG2 Decoder (software implementation for evaluation)
+ by kimu_shu
+
+本ソフトウェアは、MPEG2ハードウェアデコーダ作成にあたって、
+MPEG2コーデックの理解と、ハードウェアのベンチデータ作成用に
+実装された、MPEG2デコーダです。
+
+
