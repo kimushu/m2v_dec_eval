@@ -1,9 +1,10 @@
 //================================================================================
 // m2v_dec_eval - VLC テーブル
-// $Id$
+// $Id: vlc.c 58 2010-11-25 07:17:55Z aberi $
 //================================================================================
 
 #include "vlc.h"
+#include <malloc.h>
 
 // Macroblock addressing
 // checked (mpeg12data.c)
@@ -402,7 +403,7 @@ static const VLC_ENTRY vlc_entries_b14[] =
 };
 
 // checked (mpeg12data.c)
-STAtic const VLC_ENTRY vlc_entries_b15[] =
+static const VLC_ENTRY vlc_entries_b15[] =
 {
 	{ 0b10,                2, (0*256+1) },
 	{ 0b010,               3, (1*256+1) },
@@ -537,7 +538,7 @@ VLC_TABLE vlc_table_b15;
 ///
 /// エントリ列から、1発索引用の巨大テーブルを構築する。
 ///
-static int vlc_make_table(VLC_TABLE* t, VLC_ENTRY* e)
+static int vlc_make_table(VLC_TABLE* t, const VLC_ENTRY* e)
 {
 	t->bits = 0;
 
@@ -582,17 +583,17 @@ static int vlc_make_table(VLC_TABLE* t, VLC_ENTRY* e)
 ///
 int vlc_init_table()
 {
-	if(!vlc_make_table(vlc_table_b1,  vlc_entries_b1 )) return 0;
-	if(!vlc_make_table(vlc_table_b2,  vlc_entries_b2 )) return 0;
-	if(!vlc_make_table(vlc_table_b3,  vlc_entries_b3 )) return 0;
-	if(!vlc_make_table(vlc_table_b4,  vlc_entries_b4 )) return 0;
-	if(!vlc_make_table(vlc_table_b9,  vlc_entries_b9 )) return 0;
-	if(!vlc_make_table(vlc_table_b10, vlc_entries_b10)) return 0;
-	if(!vlc_make_table(vlc_table_b11, vlc_entries_b11)) return 0;
-	if(!vlc_make_table(vlc_table_b12, vlc_entries_b12)) return 0;
-	if(!vlc_make_table(vlc_table_b13, vlc_entries_b13)) return 0;
-	if(!vlc_make_table(vlc_table_b14, vlc_entries_b14)) return 0;
-	if(!vlc_make_table(vlc_table_b15, vlc_entries_b15)) return 0;
+	if(!vlc_make_table(&vlc_table_b1,  vlc_entries_b1 )) return 0;
+	if(!vlc_make_table(&vlc_table_b2,  vlc_entries_b2 )) return 0;
+	if(!vlc_make_table(&vlc_table_b3,  vlc_entries_b3 )) return 0;
+	if(!vlc_make_table(&vlc_table_b4,  vlc_entries_b4 )) return 0;
+	if(!vlc_make_table(&vlc_table_b9,  vlc_entries_b9 )) return 0;
+	if(!vlc_make_table(&vlc_table_b10, vlc_entries_b10)) return 0;
+	if(!vlc_make_table(&vlc_table_b11, vlc_entries_b11)) return 0;
+	if(!vlc_make_table(&vlc_table_b12, vlc_entries_b12)) return 0;
+	if(!vlc_make_table(&vlc_table_b13, vlc_entries_b13)) return 0;
+	if(!vlc_make_table(&vlc_table_b14, vlc_entries_b14)) return 0;
+	if(!vlc_make_table(&vlc_table_b15, vlc_entries_b15)) return 0;
 	return 1;
 }
 

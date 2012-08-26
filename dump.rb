@@ -2,10 +2,13 @@
 # -*- coding: utf-8 -*-
 #================================================================================
 # dump.c dump.h 生成スクリプト
-# $Id$
+# $Id: dump.rb 98 2012-04-07 03:52:11Z kimu_shu $
 #================================================================================
 
-DUMPS = %w[slice mb block rl qfs qf lf sf sf2 idwb mv]
+# 必要なファイルのリスト(サフィックス含む)
+DUMPS = %w[sequence.txt mb.txt rl.txt is.txt dq.txt idct.out idct_mid.txt] +
+		%w[idct_row.txt idct_col.txt raw.yuv mv.txt mc_out.txt] +
+		%w[parser.out isdq.out mc_fetch.out bitstream.txt]
 
 HEADER = <<EOD
 //================================================================================
@@ -15,6 +18,7 @@ HEADER = <<EOD
 
 EOD
 
+puts("generating dump.c ...")
 open("dump.c", "w") {|c|
 	c.print(HEADER)
 	c.print(<<EOD)
@@ -24,35 +28,36 @@ open("dump.c", "w") {|c|
 
 int dump_enable;
 EOD
-	(DUMPS+["yuv"]).each {|d|
-		c.puts("FILE* dump_#{d};")
+	DUMPS.each {|d|
+		c.puts("FILE* dump_#{d.split(".").first};")
 	}
 	c.print(<<EOD)
 
-const char* dump_init(const char* ref_dir)
+int dump_init(const char* dir)
 {
 	dump_enable = 0;
-	if(!ref_dir) return NULL;
+	if(!dir) return 1;	// 指定が無い場合はダンプ無し
 
 	char path[256];
-	strcpy(path, ref_dir);
+	strcpy(path, dir);
 	char* fn = path + strlen(path);
+	if(fn[-1] != '/') *(fn++) = '/';
 
 EOD
 	DUMPS.each {|d|
 		c.print(<<EOD)
-	strcpy(fn, "#{d}.txt");
-	if(!(dump_#{d} = fopen(path, "w")))
-		return "cannot open ref_*/#{d}.txt";
+	strcpy(fn, "#{d}");
+	if(!(dump_#{d.split(".").first} = fopen(path, "wb")))
+	{
+		printf("\\nError: Cannot open '%s' for writing!\\n", fn);
+		return 0;
+	}
 EOD
 	}
 
 	c.print(<<EOD)
-	strcpy(fn, "raw.yuv");
-	if(!(dump_yuv = fopen(path, "wb")))
-		return "cannot open ref_*/raw.yuv";
 
-	return NULL;
+	return 1;
 }
 
 void dump_start()
@@ -63,7 +68,8 @@ void dump_start()
 void dump_finish()
 {
 EOD
-	(DUMPS+["yuv"]).each {|d|
+	DUMPS.each {|d|
+		d = d.split(".").first
 		c.print(<<EOD)
 	if(dump_#{d}) { fclose(dump_#{d}); dump_#{d} = NULL; }
 EOD
@@ -89,11 +95,31 @@ void dump(FILE* fp, const char* desc, const char* fmt, ...)
 	va_end(args);
 }
 
+void dumpf(FILE* fp, const char* fmt, ...)
+{
+	if(!fp || !dump_enable) return;
+
+	va_list args;
+	va_start(args, fmt);
+
+	char buf[256];
+	vsprintf(buf, fmt, args);
+	fprintf(fp, "%s", buf);
+	va_end(args);
+}
+
+void dumpbin(FILE* fp, const void* data, size_t length)
+{
+	if(!fp || !dump_enable) return;
+	fwrite(data, 1, length, fp);
+}
+
 // END OF dump.c
 
 EOD
 }
 
+puts("generating dump.h ...")
 open("dump.h", "w") {|h|
 	h.print(HEADER)
 	h.print(<<EOD)
@@ -103,15 +129,17 @@ open("dump.h", "w") {|h|
 #include <stdio.h>
 
 // exports
-extern const char* dump_init(const char* ref_dir);
+extern int dump_init(const char* dir);
 extern void dump_start();
 extern void dump_finish();
 extern void dump(FILE* fp, const char* desc, const char* fmt, ...);
+extern void dumpf(FILE* fp, const char* fmt, ...);
+extern void dumpbin(FILE* fp, const void* data, size_t length);
 
 // exported file pointers
 EOD
-	(DUMPS+["yuv"]).each {|d|
-		h.puts("extern FILE* dump_#{d};")
+	DUMPS.each {|d|
+		h.puts("extern FILE* dump_#{d.split(".").first};")
 	}
 	h.print(<<EOD)
 
