@@ -10,6 +10,7 @@
 #include <signal.h>
 #include <string.h>
 #include <stdlib.h>
+#include <limits.h>
 
 static void dump_seq();
 static void sigint_handler();
@@ -42,13 +43,13 @@ static void reset_dct_dc_pred();
 
 static int stop_decode = 0;
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief ビットデコード実行
-///
-/// ビットストリームをデコードし、後段の呼び出しを行う。
-///
-/// @param bs       ビットストリーム
-///
+/**================================================================================
+ * @brief ビットデコード実行
+ *
+ * ビットストリームをデコードし、後段の呼び出しを行う。
+ *
+ * @param bs       ビットストリーム
+ */
 int bitdecode(bitstream* bs)
 {
 	if(!vlc_init_table()) return 0;
@@ -77,8 +78,15 @@ int bitdecode(bitstream* bs)
 			}
 			if(npict == start_pict && !start_slice)
 			{
+				char header[PATH_MAX];
+				sprintf(header, "# input=\"%s\"\n# vim:ts=8\n", input);
 				dump_start();
 				dump_seq();
+				dumpx_bitstream("%s", header);
+				dumpx_side("%s", header);
+				dumpx_rl("%s", header);
+				dumpx_mc_fetch("%s", header);
+				dumpx_mc_mix("%s", header);
 			}
 			cycle_esti = 0;
 			CALL(picture_header(bs));
@@ -87,6 +95,7 @@ int bitdecode(bitstream* bs)
 					npict, pic_coding_type == 1 ? 'I' : 'P');
 			CALL(extension_and_user_data(bs));
 			CALL(picture_data(bs));
+			dumpx_side("PICE\t%d\n", npict);
 			n = bs_peek(bs, 32);
 			if(++npict == end_pict) ++stop_decode;
 			printf("Picture #%d: %d cycles\n", npict, cycle_esti);
@@ -113,9 +122,9 @@ int bitdecode(bitstream* bs)
 	return 1;
 }
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief ダンプの MB/Block ヘッダを出力
-///
+/**================================================================================
+ * @brief ダンプの MB/Block ヘッダを出力
+ */
 void dump_header(FILE* fp)
 {
 	if(nblock >= 0)
@@ -135,9 +144,9 @@ void dump_header(FILE* fp)
 	}
 }
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief シーケンス情報のダンプ
-///
+/**================================================================================
+ * @brief シーケンス情報のダンプ
+ */
 void dump_seq()
 {
 	dump(dump_sequence, NULL, " %5d # sequence", nseq);
@@ -177,24 +186,24 @@ void dump_seq()
 	}
 }
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief Ctrl+C のハンドラ
-///
-/// フラグを立て、次のピクチャ境界でデコードを停止させる。
-///
+/**================================================================================
+ * @brief Ctrl+C のハンドラ
+ *
+ * フラグを立て、次のピクチャ境界でデコードを停止させる。
+ */
 static void sigint_handler()
 {
 	if(++stop_decode > 3) abort();
 }
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief 次のヘッダへ移動
-///
-/// バイト境界へ移動した上で、ヘッダの先頭バイト 0x000001 が見つかるまで
-/// ジャンプする。
-/// バイト境界移動以外のジャンプが発生した場合(つまりゴミバイトがあった場合)
-/// エラー出力にメッセージを出力する。
-///
+/**================================================================================
+ * @brief 次のヘッダへ移動
+ *
+ * バイト境界へ移動した上で、ヘッダの先頭バイト 0x000001 が見つかるまで
+ * ジャンプする。
+ * バイト境界移動以外のジャンプが発生した場合(つまりゴミバイトがあった場合)
+ * エラー出力にメッセージを出力する。
+ */
 static void next_header(bitstream* bs)
 {
 	bs_align(bs, 8);
@@ -204,9 +213,9 @@ static void next_header(bitstream* bs)
 	if(i > 0) printf("[%d bytes skipped]\n", i);
 }
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief シーケンスヘッダを取得
-///
+/**================================================================================
+ * @brief シーケンスヘッダを取得
+ */
 static int sequence_header(bitstream* bs)
 {
 	if(bs_get(bs, 32, "SEQH") != SEQ_HEADER_CODE)
@@ -282,12 +291,12 @@ static int sequence_header(bitstream* bs)
 	return 1;
 }
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief シーケンス拡張を取得
-///
-/// MPEG2 ではシーケンスヘッダの直後にくるはず。
-/// (逆に、直後にこれが無かったら MPEG1 扱いにするのが正しい)
-///
+/**================================================================================
+ * @brief シーケンス拡張を取得
+ *
+ * MPEG2 ではシーケンスヘッダの直後にくるはず。
+ * (逆に、直後にこれが無かったら MPEG1 扱いにするのが正しい)
+ */
 static int sequence_extension(bitstream* bs)
 {
 	if(bs_get(bs, 32, "SQXH") != EXT_START_CODE || bs_get(bs, 4, "SQXI") != SEQ_EXT_ID)
@@ -357,12 +366,12 @@ static int sequence_extension(bitstream* bs)
 	return 1;
 }
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief 拡張情報やユーザーデータの取得(読み飛ばし)
-///
-/// 使わない内容なので読み飛ばすだけ。
-/// ただしシーケンス拡張やピクチャ拡張は別関数で読み取る。
-///
+/**================================================================================
+ * @brief 拡張情報やユーザーデータの取得(読み飛ばし)
+ *
+ * 使わない内容なので読み飛ばすだけ。
+ * ただしシーケンス拡張やピクチャ拡張は別関数で読み取る。
+ */
 static int extension_and_user_data(bitstream* bs)
 {
 	uint32_t n = bs_peek(bs, 32);
@@ -374,11 +383,11 @@ static int extension_and_user_data(bitstream* bs)
 	return 1;
 }
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief GOP ヘッダの取得
-///
-/// 使わない内容なので読み飛ばすだけ。
-///
+/**================================================================================
+ * @brief GOP ヘッダの取得
+ *
+ * 使わない内容なので読み飛ばすだけ。
+ */
 static int gop_header(bitstream* bs)
 {
 	if(bs_get(bs, 32, "GOPH") != GROUP_START_CODE)
@@ -393,9 +402,9 @@ static int gop_header(bitstream* bs)
 	return 1;
 }
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief ピクチャヘッダの取得
-///
+/**================================================================================
+ * @brief ピクチャヘッダの取得
+ */
 static int picture_header(bitstream* bs)
 {
 	if(bs_get(bs, 32, "PICH") != PICTURE_START_CODE)
@@ -405,7 +414,6 @@ static int picture_header(bitstream* bs)
 	}
 	dump(dump_parser, NULL, "PC %4d # E=%d", npict, nseq);
 	dump(dump_idct, NULL, "PC %4d # E=%d", npict, nseq);
-	dump(dump_mc_fetch, NULL, "PC %4d # E=%d", npict, nseq);
 	temp_ref = bs_get(bs, 10, "tr");
 	pic_coding_type = bs_get(bs, 3, "pct");
 	dump(dump_idct, NULL, " %d # pic_coding_type", pic_coding_type);
@@ -440,9 +448,9 @@ static int picture_header(bitstream* bs)
 	return 1;
 }
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief ピクチャ拡張の取得
-///
+/**================================================================================
+ * @brief ピクチャ拡張の取得
+ */
 static int picture_coding_extension(bitstream* bs)
 {
 	if(bs_get(bs, 32, "PCXH") != EXT_START_CODE || bs_get(bs, 4, "pcxi") != PIC_CODE_EXT_ID)
@@ -496,12 +504,15 @@ static int picture_coding_extension(bitstream* bs)
 	}
 	bs_align(bs, 8);
 	dump(dump_parser, NULL, "%1d %1d # dc_prec qs_type", intra_dc_precision, q_scale_type);
+	dumpx_side("# E=%d,P=%d\n", nseq, npict);
+	dumpx_side("PIC\t%d\nqst\t%d\nidp\t%d\nif\t%d\n", npict,
+				q_scale_type, intra_dc_precision, pic_coding_type == 1 ? 1 : 0);
 	return 1;
 }
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief ピクチャデータ(中身)のデコード
-///
+/**================================================================================
+ * @brief ピクチャデータ(中身)のデコード
+ */
 static int picture_data(bitstream* bs)
 {
 	// バッファの切り替え
@@ -523,9 +534,9 @@ static int picture_data(bitstream* bs)
 	return 1;
 }
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief スライスの処理
-///
+/**================================================================================
+ * @brief スライスの処理
+ */
 static int slice(bitstream* bs)
 {
 	uint32_t n = bs_peek(bs, 32);
@@ -551,7 +562,6 @@ static int slice(bitstream* bs)
 	nmb = 0;
 	dump(dump_parser, NULL, "SL %4d # E=%d,P=%d", nslice, nseq, npict);
 	dump(dump_idct, NULL, "SL %4d # E=%d,P=%d", nslice, nseq, npict);
-	dump(dump_mc_fetch, NULL, "SL %4d # E=%d,P=%d", nslice, nseq, npict);
 
 	while(1)
 	{
@@ -565,9 +575,9 @@ static int slice(bitstream* bs)
 	return 1;
 }
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief マクロブロックの処理
-///
+/**================================================================================
+ * @brief マクロブロックの処理
+ */
 static int macroblock(bitstream* bs)
 {
 	int inc = 0;
@@ -627,7 +637,6 @@ static int macroblock(bitstream* bs)
 	dump(dump_parser, NULL, "MB %4d # E=%d,P=%d,S=%d", nmb, nseq, npict, nslice);
 	dump(dump_isdq, NULL, "MB %4d # E=%d,P=%d,S=%d", nmb, nseq, npict, nslice);
 	dump(dump_idct, NULL, "MB %4d # E=%d,P=%d,S=%d", nmb, nseq, npict, nslice);
-	dump(dump_mc_fetch, NULL, "MB %4d # E=%d,P=%d,S=%d", nmb, nseq, npict, nslice);
 	dump(dump_mb, /*"inc "*/"mb_x mb_y", /*" %3d"*/" %2d %2d",
 			/*inc, */mb_x, mb_y);
 	dump(dump_parser, NULL, "%3d %3d # mb_x mb_y", mb_x, mb_y);
@@ -683,8 +692,6 @@ static int macroblock(bitstream* bs)
 		PMV[0][0][0], PMV[0][0][1], mb_x, mb_y);
 	dump(dump_idct, NULL, "%5d %5d %3d %3d # mv_h mv_v mb_x mb_y",
 		PMV[0][0][0], PMV[0][0][1], mb_x, mb_y);
-	dump(dump_mc_fetch, NULL, "%5d %5d %3d %3d # mv_h mv_v mb_x mb_y",
-		PMV[0][0][0], PMV[0][0][1], mb_x, mb_y);
 
 	if(mb_intra && conceal_mv && bs_get(bs, 1, "m") != 1)
 	{
@@ -703,6 +710,10 @@ static int macroblock(bitstream* bs)
 			(mb_pattern >> 1) & 1,
 			(mb_pattern >> 0) & 1);
 	dump(dump_parser, NULL, "%2d # pattern", mb_pattern);
+
+	dumpx_side("# E=%d,P=%d,S=%d,M=%d\n", nseq, npict, nslice, nmb);
+	dumpx_side("MB\t%d\nmbx\t%d\nmby\t%d\nmvh\t%d\nmvv\t%d\nmbqsc\t%d\nintra\t%d\n",
+				nmb, mb_x, mb_y, PMV[0][0][0], PMV[0][0][1], mb_q_scale_code, mb_intra);
 
 	if(verbose_mode)
 	{
@@ -732,21 +743,31 @@ static int macroblock(bitstream* bs)
 	return 1;
 }
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief ブロックの処理
-///
+/**================================================================================
+ * @brief ブロックの処理
+ */
 static int block(bitstream* bs, int b)
 {
 	dump(dump_parser, NULL, "BL %1d # E=%d,P=%d,S=%d,M=%d", nblock, nseq, npict, nslice, nmb);
 	dump(dump_isdq, NULL, "BL %1d # E=%d,P=%d,S=%d,M=%d", nblock, nseq, npict, nslice, nmb);
 	dump(dump_idct, NULL, "BL %1d # E=%d,P=%d,S=%d,M=%d", nblock, nseq, npict, nslice, nmb);
-	dump(dump_mc_fetch, NULL, "BL %1d # E=%d,P=%d,S=%d,M=%d", nblock, nseq, npict, nslice, nmb);
 	int pat = (mb_pattern >> (5 - b)) & 1;
 	dump(dump_parser, NULL, "%1d # pat", pat);
 	dump(dump_isdq, NULL, "%1d # pat", pat);
 	dump(dump_idct, NULL, "%1d # pat", pat);
+	char pos_info[64];
+	sprintf(pos_info, "# E=%d,P=%d,S=%d,M=%d,B=%d\n", nseq, npict, nslice, nmb, nblock);
+	dumpx_bitstream(pos_info);
+	dumpx_side(pos_info);
+	dumpx_side("BLK\t%d\n", nblock);
+	dumpx_side("coded\t%d\n", pat);
+	dumpx_mc_fetch(pos_info);
+	dumpx_mc_mix(pos_info);
 	if(pat)
 	{
+		dumpx_rl(pos_info);
+		dumpx_isdq_out(pos_info);
+		dumpx_idct_out(pos_info);
 		CALL(block_coefs(bs, b));
 		CALL(invscan(QFS, QF));
 		CALL(dequant(QF, LF));
@@ -754,45 +775,23 @@ static int block(bitstream* bs, int b)
 	}
 	else memset(SF, 0, sizeof(SF));
 
-	CALL(mc(SP, b));
-
-	int cc = (b < 4) ? 0 : (b & 1) + 1;
-	int bx = (b < 4) ? (mb_x * 16 + (b & 1) * 8) : (mb_x * 8);
-	int by = (b < 4) ? (mb_y * 16 + (b & 2) * 4) : (mb_y * 8);
-
-	for(int i = 0; i < 64; ++i)
-	{
-		int v = SF[0][i] + SP[0][i];
-		if(v < 0)
-			v = 0;
-		else if(v > 255)
-			v = 255;
-		SD[0][i] = v;
-		CALL(mc_memwrite(bx + (i & 7), by + (i >> 3), cc, v));
-	}
+	CALL(mc(SF, b));
 
 	dump_header(dump_mc_out);
 	dump(dump_mc_out, "mb_x mb_y", " %2d %2d",
 		mb_x, mb_y);
 
-	for(int i = 0; i < 8; ++i)
-		dump(dump_mc_out, NULL, " %3d %3d %3d %3d %3d %3d %3d %3d",
-				SD[i][0], SD[i][1], SD[i][2], SD[i][3],
-				SD[i][4], SD[i][5], SD[i][6], SD[i][7]);
-
 	return 1;
 }
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief ブロックのDCT係数(RLペア)読み込み
-///
+/**================================================================================
+ * @brief ブロックのDCT係数(RLペア)読み込み
+ */
 static int block_coefs(bitstream* bs, int b)
 {
 	const VLC_TABLE* table_dct =
 		(intra_vlc_fmt && mb_intra) ? &vlc_table_b15 : &vlc_table_b14;
 	int i = 0;
-
-	dump_header(dump_rl);
 
 	if(mb_intra)
 	{
@@ -802,11 +801,11 @@ static int block_coefs(bitstream* bs, int b)
 		if(size > 0)
 		{
 			diff = bs_get(bs, size, "ifd");
-			dump(dump_rl, NULL, "#%2d %5d # size diff_raw (intra first)", size, diff);
+			dumpx_rl("# size=%d,diff_raw=%d\n", size, diff);
 			int half_range = 1 << (size - 1);
 			if(diff < half_range) diff = (diff + 1) - (2 * half_range);
 		}
-		else dump(dump_rl, NULL, "#%2d %5d # size diff_raw (intra first)", size, diff);
+		else dumpx_rl("# size=%d,diff_raw=%d\n", size, diff);
 
 		int cc = (b < 4) ? 0 : (b & 1) + 1;
 		QFS[i] = dct_dc_pred[cc] + diff;
@@ -829,7 +828,7 @@ static int block_coefs(bitstream* bs, int b)
 	}
 	if(i > 0)
 	{
-		dump(dump_rl, NULL, " %2d %5d", 0, QFS[0]);
+		dumpx_rl("%d\t%d\n", 0, QFS[0]);
 		dump(dump_parser, NULL, "%2d 0 %5d", 0, QFS[0]);
 	}
 
@@ -889,7 +888,7 @@ static int block_coefs(bitstream* bs, int b)
 			return 0;
 		}
 
-		dump(dump_rl, NULL, " %2d %5d", run, level);
+		dumpx_rl("%d\t%d\n", run, level);
 		dump(dump_parser, NULL, "%2d %d %5d%s", run, s ? 1 : 0, level, s ? " # escape" : "");
 		for(; run > 0; ++i, --run) QFS[i] = 0;
 		QFS[i++] = level;
@@ -897,15 +896,15 @@ static int block_coefs(bitstream* bs, int b)
 
 	for(; i < 64; ++i) QFS[i] = 0;		// 最後まで 0 で埋める
 
-	dump(dump_rl, NULL, " %2d %5d # eob", 0, 0);
+	dumpx_rl("0\t0\t# eob\n");
 	dump(dump_parser, NULL, "%2d 0 %5d # EOB", 0, 0);
 
 	return 1;
 }
 
-////////////////////////////////////////////////////////////////////////////////
-/// @brief DCT 係数の DC 成分予測のリセット
-///
+/**================================================================================
+ * @brief DCT 係数の DC 成分予測のリセット
+ */
 static void reset_dct_dc_pred()
 {
 	int i = (1 << (intra_dc_precision + 7));

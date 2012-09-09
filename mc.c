@@ -32,86 +32,149 @@ static int frame_wd, frame_hwd, frame_ht, frame_hht;
 #define XY2ADDR_U(y, x)		(((y)<<10)+(x)+320)
 #define XY2ADDR_V(y, x)		(((y)<<10)+(x)+320+512)
 
+#define MBX_WIDTH			6
+#define MBY_WIDTH			5
+#define REQUIRED_WIDTH		(MBX_WIDTH + MBY_WIDTH + 10)
+
+#define MBX_MASK			((1 << MBX_WIDTH) - 1)
+#define MBY_MASK			((1 << MBY_WIDTH) - 1)
+
+#define FBAGEN(b, f, mbx, x2, mby, y)	( \
+	( ((f) & 1) << (MBX_WIDTH + MBY_WIDTH + 9) ) | \
+	( ((b) & 4) << (MBX_WIDTH + MBY_WIDTH + 6) ) | \
+	( ((mby) & MBY_MASK) << (MBX_WIDTH + 8) ) | \
+	( ((mbx) & MBX_MASK) << 8 ) | \
+	( ((y) & 14) << 4 ) | \
+	( (((b) & 4) ? 0 : ((y) & 1)) << 4 ) | \
+	( ((x2) & 6) << 1 ) | \
+	( (((b) & 4) ? ((b) & 1) : ((x2) & 1)) << 1 ) \
+	)
+
+static uint8_t fptr[2][1 << MBY_WIDTH][1 << MBX_WIDTH];
+static uint8_t fbuf[1 << REQUIRED_WIDTH];
+
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief 動き補償 (小ブロック単位)
 ///
 /// TODO: メモリアクセスの出力
 ///
-/// @param p 動き補償画素データ(出力)
-/// @param b ブロック番号
+/// @param SF  [in] 画素差分データ
+/// @param b   [in] ブロック番号
 ///
-int mc(int p[8][8], int b)
+int mc(int SF[8][8], int b)
 {
+	int p[8][8];
+	int mixf = 1 - (fptr[0][mb_y][mb_x] & 1);
+
 	dump_header(dump_mv);
 	dump(dump_mv, "mbx mby intra pat", " %2d %2d %d %d",
 			mb_x, mb_y, mb_intra, (mb_pattern >> (5 - b)) & 1);
 
-	if(mb_intra)
-	{
-		memset(p, 0, sizeof(int) * 64);
-		return 1;
-	}
 	if(!mb_mo_fw) mv[0][0][0] = mv[0][0][1] = 0;
 
-	int ivx = mv[0][0][0];
-	int ivy = mv[0][0][1];
-	dump(dump_mv, "mvx mvy", " %5d %5d", ivx, ivy);
-
-	if(b & 4) { ivx /= 2; ivy /= 2; }	// 絶対値の小さい方へ丸め
-	int halfx = ivx & 1;
-	int halfy = ivy & 1;
-	ivx = (ivx & ~1) / 2;
-	ivy = (ivy & ~1) / 2;
-
-	dump(dump_mv, "ivx halfx", " %3d %d", ivx, halfx);
-	dump(dump_mv, "ivy halfy", " %3d %d", ivy, halfy);
-
-	ivx += (b < 4) ? (mb_x * 16 + (b & 1) * 8) : (mb_x * 8);
-	ivy += (b < 4) ? (mb_y * 16 + (b & 2) * 4) : (mb_y * 8);
-	dump(dump_mv, "ox oy", " %3d %3d", ivx, ivy);
-
-#define DO_MC(f, a)													\
-	for(int y = 0, oy = ivy; y < 8; ++y, ++oy)						\
-		for(int x = 0, ox = ivx; x < 8; ++x, ++ox)					\
-	{																\
-		if(!halfx && !halfy)										\
-			/* 水平垂直ともに整数精度 */							\
-			p[y][x] = f[a(oy, ox)];									\
-		else if(!halfx && halfy)									\
-			/* 垂直方向だけ半画素精度 */							\
-			p[y][x] = (f[a(oy, ox)] + f[a(oy+1, ox)] + 1) / 2;		\
-		else if(halfx && !halfy)									\
-			/* 水平方向だけ半画素精度 */							\
-			p[y][x] = (f[a(oy, ox)] + f[a(oy, ox+1)] + 1) / 2;		\
-		else														\
-			/* 水平垂直ともに半画素精度 */							\
-			p[y][x] = (f[a(oy, ox)] + f[a(oy, ox+1)]				\
-					 + f[a(oy+1, ox)] + f[a(oy+1, ox+1)] + 2) / 4;	\
-	}
-
-	if(b < 4)
+	if(mb_intra)
 	{
-		// if(ivx < 0 || ivy < 0 || ivx >= (frame_wd - 9) || ivy >= (frame_ht - 9))
-		// 	printf("Out of range (%d, %d)\n", ivx, ivy);
-		DO_MC(frame_prev, XY2ADDR_Y);
-	}
-	else if(b == 4)
-	{
-		// printf("U %3d,%3d,%8d\n", ivx, ivy, XY2ADDR_U(ivx, ivy));
-		DO_MC(frame_prev, XY2ADDR_U);
+		dumpx_mc_fetch("# no fetch (mb_intra=1)\n");
 	}
 	else
 	{
-		// printf("V %3d,%3d,%8d\n", ivx, ivy, XY2ADDR_V(ivx, ivy));
-		DO_MC(frame_prev, XY2ADDR_V);
+		uint32_t fetch_a[9][5];
+		uint8_t fetch_d[9][10];
+
+		int ivx = mv[0][0][0];
+		int ivy = mv[0][0][1];
+		dump(dump_mv, "mvx mvy", " %5d %5d", ivx, ivy);
+
+		if(b & 4) { ivx /= 2; ivy /= 2; }	// 絶対値の小さい方へ丸め
+		int halfx = ivx & 1;
+		int halfy = ivy & 1;
+		ivx = (ivx & ~1) / 2;
+		ivy = (ivy & ~1) / 2;
+		int oddx = ivx & 1;
+
+		dump(dump_mv, "ivx halfx", " %3d %d", ivx, halfx);
+		dump(dump_mv, "ivy halfy", " %3d %d", ivy, halfy);
+
+		ivx += (b < 4) ? (mb_x * 16 + (b & 1) * 8) : (mb_x * 8);
+		ivy += (b < 4) ? (mb_y * 16 + (b & 2) * 4) : (mb_y * 8);
+		dump(dump_mv, "ox oy", " %3d %3d", ivx, ivy);
+
+		dumpx_mc_fetch("# ivx=%d,halfx=%d,ivy=%d,halfy=%d\n",
+			ivx, halfx, ivy, halfy);
+
+		// フェッチアドレス計算
+		if(b < 4)
+		{
+			for(int y = 0; y < 9; ++y) for(int x = 0; x < 10; x += 2)
+			{
+				int ivx2 = x + ivx;
+				int ivy2 = y + ivy;
+				int f = fptr[0][(ivy2 >> 4) & MBY_MASK][(ivx2 >> 4) & MBX_MASK] & 1;
+				fetch_a[y][x >> 1] =
+					FBAGEN(b, f, (ivx2 >> 4), (ivx2 & 14) >> 1, (ivy2 >> 4), (ivy2 & 15));
+			}
+		}
+		else
+		{
+			for(int y = 0; y < 9; ++y) for(int x = 0; x < 10; x += 2)
+			{
+				int ivx2 = x + ivx;
+				int ivy2 = y + ivy;
+				int f = fptr[0][(ivy2 >> 3) & MBY_MASK][(ivx2 >> 3) & MBX_MASK] & 1;
+				fetch_a[y][x >> 1] =
+					FBAGEN(b, f, (ivx2 >> 3), (ivx2 & 14), (ivy2 >> 3), (ivy2 & 7) << 1);
+			}
+		}
+
+		// フェッチ実行
+		for(int y = 0; y < 9; ++y) for(int x = 0; x < 10; x += 2)
+		{
+			uint32_t a = fetch_a[y][x >> 1];
+			fetch_d[y][x + 0] = fbuf[a + 0];
+			fetch_d[y][x + 1] = fbuf[a + 1];
+			dumpx_mc_fetch("%06x %02x%02x\n",
+				fetch_a[y][x >> 1], fetch_d[y][x + 1], fetch_d[y][x + 0]);
+		}
+
+		// 整数画素・半画素合成
+		for(int y = 0; y < 8; ++y) for(int x = 0; x < 8; ++x)
+		{
+			int ym = y + halfy;
+			p[y][x] = (fetch_d[y][x + oddx] + fetch_d[y][x + oddx + halfx] +
+						fetch_d[ym][x + oddx] + fetch_d[ym][x + oddx + halfx] + 2) / 4;
+
+			dumpx_mc_fetch("%s %2x%s",
+				x == 0 ? "#" : "", p[y][x], x == 7 ? "\n" : "");
+		}
+		dumpx_mc_fetch("#------------------------\n");
+		// memset(p, 0, sizeof(p));
 	}
 
-#undef DO_MC
+	// ミックス実行
+	for(int y = 0; y < 8; ++y) for(int x = 0; x < 8; ++x)
+	{
+		uint32_t a;
+		if(b < 4)
+			a = FBAGEN(b, mixf, mb_x, (x + (b & 1) * 8) >> 1, mb_y, y + (b & 2) * 4);
+		else
+			a = FBAGEN(b, mixf, mb_x, x, mb_y, y * 2);
 
-	for(int i = 0; i < 8; ++i)
-		dump(dump_mc_fetch, NULL, " %3d %3d %3d %3d %3d %3d %3d %3d",
-				p[i][0], p[i][1], p[i][2], p[i][3],
-				p[i][4], p[i][5], p[i][6], p[i][7]);
+		int px = SF[y][x] + (mb_intra ? 0 : p[y][x]);
+		if(px < 0)
+			px = 0;
+		else if(px > 255)
+			px = 255;
+
+		fbuf[a + (x & 1)] = px;
+
+		if(x & 1)
+		{
+			dumpx_mc_mix("%06x %02x%02x\n", a, fbuf[a + 1], fbuf[a + 0]);
+		}
+	}
+
+	// フレームポインタ更新
+	fptr[1][mb_y][mb_x] = 2 | mixf;
 
 	return 1;
 }
@@ -288,36 +351,54 @@ int mc_copybuffer(int mbx, int mby, int b)
 /// @brief フレームバッファの YUV 出力
 ///
 /// 現在のフレームバッファを YUV に出力する。
-/// して切り替える。
 ///
 void mc_output_yuv()
 {
-	for(int y = 0; y < video_ht; ++y) for(int x = 0; x < video_wd; ++x)
+	// フレームポインタの全転送
+	for(int mby = 0; mby < (1 << MBY_WIDTH); ++mby)
 	{
-		int v = frame_now[XY2ADDR_Y(y, x)];
+		for(int mbx = 0; mbx < (1 << MBX_WIDTH); ++mbx)
+		{
+			fptr[0][mby][mbx] = fptr[1][mby][mbx];
+			fptr[1][mby][mbx] &= ~2;
+		}
+	}
+
+	for(int y = 0; y < video_ht; ++y) for(int x = 0; x < video_wd; x += 2)
+	{
+		// int v = frame_now[XY2ADDR_Y(y, x)];
 		// int i = v * 224 / 256 + 16;
 		// if(i > 255) i = 255;
-		int i = v;
-		dumpbin(dump_raw, &i, 1);
+		// int i = v;
+		uint32_t a = FBAGEN(0, fptr[0][(y >> 4) & MBY_MASK][(x >> 4) & MBX_MASK],
+							x >> 4, x >> 1, y >> 4, y);
+		uint8_t i[2] = { fbuf[a + 0], fbuf[a + 1] };
+		dumpbin(dump_raw, i, 2);
 	}
 
 	int hwd = (video_wd + 1) >> 1;
 	int hht = (video_ht + 1) >> 1;
-	for(int y = 0; y < hht; ++y) for(int x = 0; x < hwd; ++x)
+	for(int y = 0; y < hht; ++y) for(int x = 0; x < hwd; x += 2)
 	{
-		int v = frame_now[XY2ADDR_U(y, x)];
+		// int v = frame_now[XY2ADDR_U(y, x)];
 		// int i = v * 219 / 256 + 16;
 		// if(i > 255) i = 255;
-		int i = v;
-		dumpbin(dump_raw, &i, 1);
+		// int i = v;
+		uint32_t a = FBAGEN(4, fptr[0][(y >> 3) & MBY_MASK][(x >> 3) & MBX_MASK],
+							x >> 3, x, y >> 3, y << 1);
+		uint8_t i[2] = { fbuf[a + 0], fbuf[a + 1] };
+		dumpbin(dump_raw, i, 2);
 	}
-	for(int y = 0; y < hht; ++y) for(int x = 0; x < hwd; ++x)
+	for(int y = 0; y < hht; ++y) for(int x = 0; x < hwd; x += 2)
 	{
-		int v = frame_now[XY2ADDR_V(y, x)];
+		// int v = frame_now[XY2ADDR_V(y, x)];
 		// int i = v * 219 / 256 + 16;
 		// if(i > 255) i = 255;
-		int i = v;
-		dumpbin(dump_raw, &i, 1);
+		// int i = v;
+		uint32_t a = FBAGEN(5, fptr[0][(y >> 3) & MBY_MASK][(x >> 3) & MBX_MASK],
+							x >> 3, x, y >> 3, y << 1);
+		uint8_t i[2] = { fbuf[a + 0], fbuf[a + 1] };
+		dumpbin(dump_raw, i, 2);
 	}
 
 	if(dump_raw) fflush(dump_raw);

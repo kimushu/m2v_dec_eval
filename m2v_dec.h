@@ -30,6 +30,7 @@ extern int dct_dc_pred[3], mb_quant, mb_mo_fw, mb_coded, mb_intra, mb_hasmv,
 			mb_q_scale_code, mb_pattern;
 extern int cycle_esti;
 extern int QFS[64], QF[8][8], LF[8][8], SF[8][8], SP[8][8], SD[8][8];
+extern char input[];
 
 // mc.c
 extern int mo_code[1][1][2], mo_residual[1][1][2], mv[1][1][2], PMV[1][1][2];
@@ -46,7 +47,7 @@ extern int bitdecode(bitstream* bs);
 extern int invscan(int qfs[64], int qf[8][8]);
 extern int dequant(int qf[8][8], int lf[8][8]);
 extern int idct(int lf[8][8], int sf[8][8]);
-extern int mc(int p[8][8], int b);
+extern int mc(int SF[8][8], int b);
 extern void mc_reset_mv_pred();
 extern int mc_decode_mv();
 extern int mc_allocbuffer();

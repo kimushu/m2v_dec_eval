@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <limits.h>
 #include "m2v_dec.h"
 #include "ps.h"
 #include "dump.h"
@@ -32,14 +33,15 @@ int dct_dc_pred[3], mb_quant, mb_mo_fw, mb_coded, mb_intra, mb_hasmv,
 	mb_q_scale_code, mb_pattern;
 int cycle_esti;
 int QFS[64], QF[8][8], LF[8][8], SF[8][8], SP[8][8], SD[8][8];
+char input[PATH_MAX];
 
 ////////////////////////////////////////////////////////////////////////////////
 /// @brief エントリポイント
 ///
 int main(int argc, char* argv[])
 {
-	const char* input = NULL;
 	int dump = 0;
+	input[0] = 0;
 	start_pict = start_slice = end_pict = end_slice = 0;
 	int ch;
 	while((ch = getopt(argc, argv, "p:i:ds:S:t:T:v")) != -1) switch(ch)
@@ -48,7 +50,7 @@ int main(int argc, char* argv[])
 		// PS の分解
 		if(!decode_pack(optarg)) return 1;
 		return 0;
-	case 'i': input = optarg; break;
+	case 'i': strcpy(input, optarg); break;
 	case 's': start_slice = atoi(optarg); break;
 	case 'S': start_pict = atoi(optarg); break;
 	case 't': end_slice = atoi(optarg); break;
@@ -59,7 +61,7 @@ int main(int argc, char* argv[])
 		printf("Error: Unknown option: %c\n", ch);
 		return 1;
 	}
-	if(!input)
+	if(!input[0])
 	{
 		printf(
 		"Usage:\n"
@@ -83,7 +85,7 @@ int main(int argc, char* argv[])
 
 	if(dump)
 	{
-		char dump_dir[256];
+		char dump_dir[PATH_MAX];
 		strcpy(dump_dir, input);
 		char* sl = strrchr(dump_dir, '/');
 		if(!sl) sl = dump_dir - 1;

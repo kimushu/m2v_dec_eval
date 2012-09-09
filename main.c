@@ -10,7 +10,6 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <errno.h>
-#include "m2vdec.h"
 #include "ps.h"
 #include "video.h"
 #include "bitstream.h"

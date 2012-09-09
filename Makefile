@@ -8,8 +8,8 @@ TARGET = m2vdec
 # TEST = gs_m2v el_m2v sd_m2v el1m_m2v sd1m_m2v
 #TEST ?= el1m_m2v nichi2m_m2v
 #TEST ?= el1m_m2v
-#TEST ?= mj1m_m2v pd1m_m2v
-TEST ?= pdcut
+TEST ?= pd1m_m2v
+#TEST ?= pdcut
 
 SOURCES = video.c ps.c vlc.c dump.c bitreader.c bitdecoder.c dequant.c \
 			idct.c mc.c
@@ -41,6 +41,9 @@ clean:
 test: $(foreach t,$(TEST),ref_$(t).mpg.vs/mb.txt)
 
 ref_%/mb.txt: % $(TARGET)
-	./$(TARGET) -i $< -T 60 `cat $*.opt` -d
+	./$(TARGET) -i $< -T 10 `cat $*.opt` -d
 	ln -sf ../$* ref_$*/input.bin
+	echo "#!/bin/sh" > ref_$*/view_raw.sh
+	echo "animate -size 320x180 -delay 1 -sampling-factor 4:2:0 -depth 8 -colorspace RGB raw.yuv" >> ref_$*/view_raw.sh
+	chmod +x ref_$*/view_raw.sh
 

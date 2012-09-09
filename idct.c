@@ -78,6 +78,7 @@ int idct(int lf[8][8], int sf[8][8])
 		else if(v > 255)
 			sf[0][i] = 255;
 		dumpf(dump_idct, "%4d%s", sf[0][i], (i & 7) == 7 ? "\n" : "");
+		dumpx_idct_out("%4d%s", sf[0][i], (i & 7) == 7 ? "\n" : "");
 	}
 
 	return 1;

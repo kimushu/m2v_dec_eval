@@ -58,7 +58,7 @@ void bs_close(bitstream* bs)
 ///
 uint32_t bs_get(bitstream* bs, int bits, const char* dump)
 {
-	uint32_t r = bs_peek(bs, bits);
+	uint32_t r = bits > 0 ? bs_peek(bs, bits) : 0;
 	char text[64], *p;
 	if(dump)
 	{
@@ -123,7 +123,8 @@ uint32_t bs_get(bitstream* bs, int bits, const char* dump)
 ///
 void bs_align(bitstream* bs, int bits)
 {
-	if(!bs_aligned(bs, bits)) bs_get(bs, bs->left_bits % bits, NULL);
+	if(!bs_aligned(bs, bits)) bs_get(bs, bs->left_bits % bits, "align");
+	else bs_get(bs, 0, "align");
 }
 
 ////////////////////////////////////////////////////////////////////////////////

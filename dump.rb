@@ -6,9 +6,9 @@
 #================================================================================
 
 # 必要なファイルのリスト(サフィックス含む)
-DUMPS = %w[sequence.txt mb.txt rl.txt is.txt dq.txt idct.out idct_mid.txt] +
+DUMPS = %w[bitstream.txt side.txt rl.txt isdq_out.txt idct_out.txt sequence.txt mb.txt is.txt dq.txt idct.out idct_mid.txt] +
 		%w[idct_row.txt idct_col.txt raw.yuv mv.txt mc_out.txt] +
-		%w[parser.out isdq.out mc_fetch.out bitstream.txt]
+		%w[parser.out isdq.out mc_fetch.out mc_mem.txt mc_mix.out]
 
 HEADER = <<EOD
 //================================================================================
@@ -76,7 +76,22 @@ EOD
 	}
 	c.print(<<EOD)
 }
+EOD
+	DUMPS.each {|d|
+		d = d.split(".").first
+		c.print(<<EOD)
+void dumpx_#{d}(const char* fmt, ...)
+{
+	if(!dump_enable || !dump_#{d}) return;
+	va_list args;
+	va_start(args, fmt);
+	vfprintf(dump_#{d}, fmt, args);
+	va_end(args);
+}
 
+EOD
+	}
+	c.print(<<EOD)
 void dump(FILE* fp, const char* desc, const char* fmt, ...)
 {
 	if(!fp || !dump_enable) return;
@@ -139,7 +154,9 @@ extern void dumpbin(FILE* fp, const void* data, size_t length);
 // exported file pointers
 EOD
 	DUMPS.each {|d|
-		h.puts("extern FILE* dump_#{d.split(".").first};")
+		d = d.split(".").first
+		h.puts("extern void dumpx_#{d}(const char* fmt, ...);")
+		h.puts("extern FILE* dump_#{d};")
 	}
 	h.print(<<EOD)
 

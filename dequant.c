@@ -118,6 +118,8 @@ int dequant(int qf[8][8], int lf[8][8])
 		if(i == 63 && !(mm & 1)) lf[0][i] ^= 1;
 		dumpf(dump_dq, " %5d%s", lf[0][i], (i & 7) == 7 ? "\n" : "");
 		dumpf(dump_isdq, "%5d%s", lf[0][i], (i & 7) == 7 ? "\n" : "");
+		dumpx_isdq_out(" %5d%s", lf[0][i], (i & 7) == 7 ? "\n" : "");
+
 	}
 
 	return 1;
