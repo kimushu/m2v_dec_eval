@@ -7,8 +7,8 @@
 
 # 必要なファイルのリスト(サフィックス含む)
 DUMPS = %w[bitstream.txt side.txt rl.txt isdq_out.txt idct_out.txt sequence.txt mb.txt is.txt dq.txt idct.out idct_mid.txt] +
-		%w[idct_row.txt idct_col.txt raw.yuv mv.txt mc_out.txt] +
-		%w[parser.out isdq.out mc_fetch.out mc_mem.txt mc_mix.out]
+		%w[idct_row.txt idct_col.txt raw.yuv mv.txt mc_out.txt rgb.txt] +
+		%w[parser.out isdq.out mc_fetch.out mc_mem.txt mc_mix.out fptr.out]
 
 HEADER = <<EOD
 //================================================================================

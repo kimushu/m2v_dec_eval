@@ -87,6 +87,8 @@ int bitdecode(bitstream* bs)
 				dumpx_rl("%s", header);
 				dumpx_mc_fetch("%s", header);
 				dumpx_mc_mix("%s", header);
+				dumpx_fptr("%s", header);
+				dumpx_rgb("%s", header);
 			}
 			cycle_esti = 0;
 			CALL(picture_header(bs));

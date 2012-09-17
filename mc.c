@@ -66,6 +66,8 @@ int mc(int SF[8][8], int b)
 	int p[8][8];
 	int mixf = 1 - (fptr[0][mb_y][mb_x] & 1);
 
+	if(pic_coding_type == 1) mixf = 0;
+
 	dump_header(dump_mv);
 	dump(dump_mv, "mbx mby intra pat", " %2d %2d %d %d",
 			mb_x, mb_y, mb_intra, (mb_pattern >> (5 - b)) & 1);
@@ -354,6 +356,10 @@ int mc_copybuffer(int mbx, int mby, int b)
 ///
 void mc_output_yuv()
 {
+	dumpx_fptr("# E=%d,P=%d\n", nseq, npict);
+	dumpx_rgb("# E=%d,P=%d\n", nseq, npict);
+	dumpx_fptr("%d %d %d %d\n", video_wd, video_ht, MBX_WIDTH, MBY_WIDTH);
+
 	// フレームポインタの全転送
 	for(int mby = 0; mby < (1 << MBY_WIDTH); ++mby)
 	{
@@ -361,15 +367,15 @@ void mc_output_yuv()
 		{
 			fptr[0][mby][mbx] = fptr[1][mby][mbx];
 			fptr[1][mby][mbx] &= ~2;
+			dumpx_fptr("%1d", fptr[0][mby][mbx]);
 		}
+		dumpx_fptr("\n");
 	}
+
+	dumpx_mc_mix("# EOP\n");
 
 	for(int y = 0; y < video_ht; ++y) for(int x = 0; x < video_wd; x += 2)
 	{
-		// int v = frame_now[XY2ADDR_Y(y, x)];
-		// int i = v * 224 / 256 + 16;
-		// if(i > 255) i = 255;
-		// int i = v;
 		uint32_t a = FBAGEN(0, fptr[0][(y >> 4) & MBY_MASK][(x >> 4) & MBX_MASK],
 							x >> 4, x >> 1, y >> 4, y);
 		uint8_t i[2] = { fbuf[a + 0], fbuf[a + 1] };
@@ -380,10 +386,6 @@ void mc_output_yuv()
 	int hht = (video_ht + 1) >> 1;
 	for(int y = 0; y < hht; ++y) for(int x = 0; x < hwd; x += 2)
 	{
-		// int v = frame_now[XY2ADDR_U(y, x)];
-		// int i = v * 219 / 256 + 16;
-		// if(i > 255) i = 255;
-		// int i = v;
 		uint32_t a = FBAGEN(4, fptr[0][(y >> 3) & MBY_MASK][(x >> 3) & MBX_MASK],
 							x >> 3, x, y >> 3, y << 1);
 		uint8_t i[2] = { fbuf[a + 0], fbuf[a + 1] };
@@ -391,14 +393,45 @@ void mc_output_yuv()
 	}
 	for(int y = 0; y < hht; ++y) for(int x = 0; x < hwd; x += 2)
 	{
-		// int v = frame_now[XY2ADDR_V(y, x)];
-		// int i = v * 219 / 256 + 16;
-		// if(i > 255) i = 255;
-		// int i = v;
 		uint32_t a = FBAGEN(5, fptr[0][(y >> 3) & MBY_MASK][(x >> 3) & MBX_MASK],
 							x >> 3, x, y >> 3, y << 1);
 		uint8_t i[2] = { fbuf[a + 0], fbuf[a + 1] };
 		dumpbin(dump_raw, i, 2);
+	}
+
+	dumpx_rgb("%d %d\n", video_wd, video_ht);
+	for(int y = 0; y < video_ht; ++y) for(int x = 0; x < video_wd; ++x)
+	{
+		// get YCbCr
+		int cy = fbuf[FBAGEN(0, fptr[0][(y >> 4) & MBY_MASK][(x >> 4) & MBX_MASK],
+								x >> 4, x >> 1, y >> 4, y) + (x & 1)];
+		int ccr = fbuf[FBAGEN(4, fptr[0][(y >> 4) & MBY_MASK][(x >> 4) & MBX_MASK],
+								x >> 4, x >> 1, y >> 4, y) + ((x & 2) >> 1)];
+		int ccb = fbuf[FBAGEN(5, fptr[0][(y >> 4) & MBY_MASK][(x >> 4) & MBX_MASK],
+								x >> 4, x >> 1, y >> 4, y) + ((x & 2) >> 1)];
+
+		// convert to RGB
+		int cr, cg, cb;
+		cr = cg = cb = (-298 * 16 + 128) + 298 * cy;
+		cr += 409 * (ccr - 128); cg -= 100 * (ccb - 128);
+		cb += 517 * (ccb - 128); cg -= 208 * (ccr - 128);
+
+		// saturation
+		if(cr < 0) cr = 0;
+		if(cg < 0) cg = 0;
+		if(cb < 0) cb = 0;
+		cr >>= 8;
+		cg >>= 8;
+		cb >>= 8;
+
+		// combine to pixel RGB
+		uint16_t px = ((cr & 0xf8) << 8) | ((cg & 0xfc) << 3) | ((cb & 0xf8) >> 3);
+
+		dumpx_rgb("%04x ", px);
+		if(x == (video_wd - 1))
+			dumpx_rgb("# y=%d%s\n", y, ((y % 16) == 0) ? " *" : "");
+		else if((x % 16) == 15)
+			dumpx_rgb(" ");
 	}
 
 	if(dump_raw) fflush(dump_raw);
