@@ -14,7 +14,7 @@
 // video.c
 extern int verbose_mode;
 extern int nseq, npict, nslice, nmb, nblock;
-extern int start_pict, start_slice, end_pict, end_slice;
+extern int start_seq, end_seq, max_pictures;
 extern int video_wd, video_ht, mb_wd, mb_ht, cust_qm_intra, cust_qm_nonintra,
 			aspect_ratio, frame_rate_code, frame_rate_n, frame_rate_d,
 			bitrate_value, vbv_buf_size, const_param_flag;

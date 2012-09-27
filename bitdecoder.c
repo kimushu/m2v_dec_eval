@@ -58,6 +58,7 @@ int bitdecode(bitstream* bs)
 	nseq = -1;
 
 	int cycle_total = 0, cycle_picts = 0, cycle_peak = 0;
+	int remainder_pictures = max_pictures;
 
 	uint32_t n;
 	next_header(bs);
@@ -69,26 +70,26 @@ int bitdecode(bitstream* bs)
 		CALL(sequence_extension(bs));
 		CALL(mc_allocbuffer());
 		CALL(extension_and_user_data(bs));
+		if(nseq == start_seq)
+		{
+			char header[PATH_MAX];
+			sprintf(header, "# input=\"%s\"\n# vim:ts=8\n", input);
+			dump_start();
+			dump_seq();
+			dumpx_bitstream("%s", header);
+			dumpx_side("%s", header);
+			dumpx_rl("%s", header);
+			dumpx_mc_fetch("%s", header);
+			dumpx_mc_mix("%s", header);
+			dumpx_fptr("%s", header);
+			dumpx_rgb("%s", header);
+		}
 		do
 		{
 			if(bs_peek(bs, 32) == GROUP_START_CODE)
 			{
 				CALL(gop_header(bs));
 				CALL(extension_and_user_data(bs));
-			}
-			if(npict == start_pict && !start_slice)
-			{
-				char header[PATH_MAX];
-				sprintf(header, "# input=\"%s\"\n# vim:ts=8\n", input);
-				dump_start();
-				dump_seq();
-				dumpx_bitstream("%s", header);
-				dumpx_side("%s", header);
-				dumpx_rl("%s", header);
-				dumpx_mc_fetch("%s", header);
-				dumpx_mc_mix("%s", header);
-				dumpx_fptr("%s", header);
-				dumpx_rgb("%s", header);
 			}
 			cycle_esti = 0;
 			CALL(picture_header(bs));
@@ -99,7 +100,8 @@ int bitdecode(bitstream* bs)
 			CALL(picture_data(bs));
 			dumpx_side("PICE\t%d\n", npict);
 			n = bs_peek(bs, 32);
-			if(++npict == end_pict) ++stop_decode;
+			++npict;
+			if(nseq >= start_seq && --remainder_pictures == 0) stop_decode = 1;
 			printf("Picture #%d: %d cycles\n", npict, cycle_esti);
 			if(cycle_peak < cycle_esti) cycle_peak = cycle_esti;
 			cycle_total += cycle_esti;
@@ -107,6 +109,7 @@ int bitdecode(bitstream* bs)
 			if(stop_decode) break;
 		}
 		while(n == PICTURE_START_CODE || n == GROUP_START_CODE);
+		if(end_seq >= start_seq && nseq == end_seq) stop_decode = 1;
 		if(stop_decode) break;
 	}
 	while(n != SEQ_END_CODE);
@@ -365,6 +368,9 @@ static int sequence_extension(bitstream* bs)
 	}
 	bs_align(bs, 8);
 
+	dumpx_side("# E=%d\n", nseq);
+	dumpx_side("SEQ\t%d\nvw\t%d\nvh\t%d\n", nseq, video_wd, video_ht);
+
 	return 1;
 }
 
@@ -524,10 +530,9 @@ static int picture_data(bitstream* bs)
 
 	while(1)
 	{
-		if(nslice == start_slice && !start_pict) dump_start();
 		r = slice(bs);
 		if(!r) return 0;
-		if(r < 0 || ++nslice == end_slice) break;
+		if(r < 0) break;
 	}
 
 	// 出力

@@ -41,7 +41,7 @@ clean:
 test: $(foreach t,$(TEST),ref_$(t).mpg.vs/mb.txt)
 
 ref_%/mb.txt: % $(TARGET)
-	./$(TARGET) -i $< -T 10 `cat $*.opt` -d
+	./$(TARGET) -i $< `cat $*.opt` -d
 	ln -sf ../$* ref_$*/input.bin
 	echo "#!/bin/sh" > ref_$*/view_raw.sh
 	echo "animate -size 320x180 -delay 1 -sampling-factor 4:2:0 -depth 8 -colorspace RGB raw.yuv" >> ref_$*/view_raw.sh

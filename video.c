@@ -18,7 +18,7 @@
 int verbose_mode;
 int nseq, npict, nslice, nmb, nblock;
 		// nmbはスライス毎に0リセット,nblockはMB毎に(ry
-int start_pict, start_slice, end_pict, end_slice;
+int start_seq, end_seq, max_pictures;
 int video_wd, video_ht, mb_wd, mb_ht, cust_qm_intra, cust_qm_nonintra,
 	aspect_ratio, frame_rate_code, frame_rate_n, frame_rate_d,
 	bitrate_value, vbv_buf_size, const_param_flag;
@@ -42,19 +42,19 @@ int main(int argc, char* argv[])
 {
 	int dump = 0;
 	input[0] = 0;
-	start_pict = start_slice = end_pict = end_slice = 0;
+	start_seq = 0;
+	end_seq = max_pictures = -1;
 	int ch;
-	while((ch = getopt(argc, argv, "p:i:ds:S:t:T:v")) != -1) switch(ch)
+	while((ch = getopt(argc, argv, "p:i:ds:t:T:v")) != -1) switch(ch)
 	{
 	case 'p':
 		// PS の分解
 		if(!decode_pack(optarg)) return 1;
 		return 0;
 	case 'i': strcpy(input, optarg); break;
-	case 's': start_slice = atoi(optarg); break;
-	case 'S': start_pict = atoi(optarg); break;
-	case 't': end_slice = atoi(optarg); break;
-	case 'T': end_pict = atoi(optarg); break;
+	case 's': start_seq = atoi(optarg); break;
+	case 't': end_seq = atoi(optarg); break;
+	case 'T': max_pictures = atoi(optarg); break;
 	case 'd': dump = 1; break;
 	case 'v': verbose_mode = 1; break;
 	default:
@@ -71,17 +71,15 @@ int main(int argc, char* argv[])
 		"Options:\n"
 		"  -v          Verbose output\n"
 		"  -d          Enable dump\n"
-		"  -s <num>    Specify dump-start slice\n"
-		"  -S <num>    Specify dump-start picture\n"
-		"  -t <num>    Specify duration in slices\n"
+		"  -s <num>    Specify dump-start sequence\n"
+		"  -t <num>    Specify duration in sequences\n"
 		"  -T <num>    Specify duration in pictures\n"
 		"\n"
 		, argv[0], argv[0]);
 		return 1;
 	}
 
-	end_slice += start_slice;
-	end_pict += start_pict;
+	end_seq += start_seq;
 
 	if(dump)
 	{
