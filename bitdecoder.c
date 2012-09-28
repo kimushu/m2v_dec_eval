@@ -55,7 +55,7 @@ int bitdecode(bitstream* bs)
 	if(!vlc_init_table()) return 0;
 	signal(SIGINT, sigint_handler);
 	npict = nslice = 0;
-	nseq = -1;
+	nseq = 0;
 
 	int cycle_total = 0, cycle_picts = 0, cycle_peak = 0;
 	int remainder_pictures = max_pictures;
@@ -65,14 +65,10 @@ int bitdecode(bitstream* bs)
 
 	do
 	{
-		CALL(sequence_header(bs));
-		next_header(bs);
-		CALL(sequence_extension(bs));
-		CALL(mc_allocbuffer());
-		CALL(extension_and_user_data(bs));
 		if(nseq == start_seq)
 		{
 			char header[PATH_MAX];
+			printf("---- START DUMP ----\n");
 			sprintf(header, "# input=\"%s\"\n# vim:ts=8\n", input);
 			dump_start();
 			dump_seq();
@@ -84,6 +80,11 @@ int bitdecode(bitstream* bs)
 			dumpx_fptr("%s", header);
 			dumpx_rgb("%s", header);
 		}
+		CALL(sequence_header(bs));
+		next_header(bs);
+		CALL(sequence_extension(bs));
+		CALL(mc_allocbuffer());
+		CALL(extension_and_user_data(bs));
 		do
 		{
 			if(bs_peek(bs, 32) == GROUP_START_CODE)
@@ -111,6 +112,7 @@ int bitdecode(bitstream* bs)
 		while(n == PICTURE_START_CODE || n == GROUP_START_CODE);
 		if(end_seq >= start_seq && nseq == end_seq) stop_decode = 1;
 		if(stop_decode) break;
+		++nseq;
 	}
 	while(n != SEQ_END_CODE);
 
@@ -233,7 +235,7 @@ static int sequence_header(bitstream* bs)
 	video_ht = bs_get(bs, 12, "vh");
 	mb_wd = (video_wd + 15) >> 4;
 	mb_ht = (video_ht + 15) >> 4;
-	printf("# Sequence %04d\n", nseq + 1);
+	printf("# Sequence %04d\n", nseq);
 	printf("Video Size: %dx%d, (%dx%d MBs)\n",
 		video_wd, video_ht, mb_wd, mb_ht);
 	aspect_ratio = bs_get(bs, 4, "ar");
@@ -291,7 +293,20 @@ static int sequence_header(bitstream* bs)
 		for(int i = 0; i < 64; ++i) nonintra_qmat[0][i] = 16;
 	}
 
-	nseq++;
+	dumpx_side("# E=%d\n", nseq);
+	dumpx_side("SEQ\t%d\nvw\t%d\nvh\t%d\n", nseq, video_wd, video_ht);
+	dumpx_side("frc\t%d\n", frame_rate_code);
+	dumpx_side("iqm?\t%d\n", cust_qm_intra);
+	for(int i = 0; cust_qm_intra && i < 64; ++i)
+	{
+		dumpx_side(" %3d%s", custom_qmat[1][i], (i & 7) == 7 ? "\n" : "");
+	}
+	dumpx_side("nqm?\t%d\n", cust_qm_nonintra);
+	for(int i = 0; cust_qm_nonintra && i < 64; ++i)
+	{
+		dumpx_side(" %3d%s", custom_qmat[0][i], (i & 7) == 7 ? "\n" : "");
+	}
+
 	dump_seq();
 	return 1;
 }
@@ -367,9 +382,6 @@ static int sequence_extension(bitstream* bs)
 		bs_get(bs, 5, "frd");
 	}
 	bs_align(bs, 8);
-
-	dumpx_side("# E=%d\n", nseq);
-	dumpx_side("SEQ\t%d\nvw\t%d\nvh\t%d\n", nseq, video_wd, video_ht);
 
 	return 1;
 }
